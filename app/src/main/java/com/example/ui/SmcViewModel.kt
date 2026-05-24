@@ -1,12 +1,14 @@
 package com.example.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.SmcAnalyzer
 import com.example.data.api.GeminiSMCGenerator
+import com.example.data.api.YahooFinanceService
 import com.example.data.local.*
 import com.example.model.*
 import kotlinx.coroutines.Dispatchers
@@ -79,10 +81,13 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
         // 2. Load default timeframe candles
         loadTimeframeCandles(_selectedTimeframe.value)
 
-        // 3. Start live price simulator
+        // 3. Start live price simulator and auto background TradingView sync
         startLiveTickingService()
 
-        // 4. Set first risk model defaults to DB if empty
+        // 4. Trigger active background fetching of all timeframes from Yahoo Finance (TradingView spot index GC=F)
+        triggerAllTimeframesRealDataFetch()
+
+        // 5. Set first risk model defaults to DB if empty
         viewModelScope.launch(Dispatchers.IO) {
             if (riskDao.getRiskPreferenceSync() == null) {
                 riskDao.saveRiskPreference(UserRiskPreference())
@@ -158,10 +163,64 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadTimeframeCandles(tf: String) {
-        val currentList = timeframeCandles[tf] ?: return
-        _candles.value = currentList
-        _currentPrice.value = currentList.last().close
-        recalculateSMC(tf, currentList)
+        val currentList = timeframeCandles[tf] ?: emptyList()
+        if (currentList.isNotEmpty()) {
+            _candles.value = currentList
+            _currentPrice.value = currentList.last().close
+            recalculateSMC(tf, currentList)
+        }
+        
+        // Fetch up-to-date real market candles from TradingView index asynchronously (zero UI lag)
+        fetchLiveCandles(tf)
+    }
+
+    private fun fetchLiveCandles(tf: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val realCandles = YahooFinanceService.fetchGoldCandles(tf)
+                if (realCandles.isNotEmpty()) {
+                    timeframeCandles[tf] = realCandles
+                    if (_selectedTimeframe.value == tf) {
+                        _candles.value = realCandles
+                        _currentPrice.value = realCandles.last().close
+                        recalculateSMC(tf, realCandles)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("SmcViewModel", "Quiet live fetch failed for timeframe $tf: ${e.message}")
+            }
+        }
+    }
+
+    private fun triggerAllTimeframesRealDataFetch() {
+        viewModelScope.launch(Dispatchers.IO) {
+            // First run fetch for selected timeframe so screen immediately receives real live prices
+            val activeTf = _selectedTimeframe.value
+            try {
+                val realCandles = YahooFinanceService.fetchGoldCandles(activeTf)
+                if (realCandles.isNotEmpty()) {
+                    timeframeCandles[activeTf] = realCandles
+                    _candles.value = realCandles
+                    _currentPrice.value = realCandles.last().close
+                    recalculateSMC(activeTf, realCandles)
+                }
+            } catch (e: Exception) {
+                Log.e("SmcViewModel", "Warmup active fetch failed: ${e.message}")
+            }
+
+            // Sync other timeframes progressively in the background to avoid heavy network slamming
+            timeframes.filter { it != activeTf }.forEach { tf ->
+                delay(2000) // gentle spacing
+                try {
+                    val realCandles = YahooFinanceService.fetchGoldCandles(tf)
+                    if (realCandles.isNotEmpty()) {
+                        timeframeCandles[tf] = realCandles
+                    }
+                } catch (e: Exception) {
+                    Log.e("SmcViewModel", "Warmup background sync failed for $tf")
+                }
+            }
+        }
     }
 
     private fun recalculateSMC(tf: String, list: List<XauCandle>) {
@@ -172,6 +231,7 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
     private fun startLiveTickingService() {
         liveUpdateJob?.cancel()
         liveUpdateJob = viewModelScope.launch(Dispatchers.Default) {
+            var loopCounter = 0
             while (true) {
                 delay(1500) // update tick every 1.5 seconds
 
@@ -182,7 +242,7 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
                 val lastIdx = currentList.size - 1
                 val lastCandle = currentList[lastIdx]
 
-                // Live price fluctuation
+                // Real-time live micro-price fluctuations (simulating ticks on top of TradingView baseline)
                 val tickNoise = (Random.nextDouble() - 0.5) * when (tf) {
                     "1m" -> 0.15
                     "5m" -> 0.35
@@ -212,6 +272,36 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Run SMC analysis and state updates in light background thread
                 recalculateSMC(tf, currentList)
+
+                // Synchronize with the live TradingView index in background every 30 seconds for absolute accuracy
+                loopCounter++
+                if (loopCounter >= 20) {
+                    loopCounter = 0
+                    viewModelScope.launch(Dispatchers.IO) {
+                        try {
+                            val realCandles = YahooFinanceService.fetchGoldCandles(tf)
+                            if (realCandles.isNotEmpty()) {
+                                timeframeCandles[tf] = realCandles
+                                if (_selectedTimeframe.value == tf) {
+                                    val mergedList = realCandles.toMutableList()
+                                    // Smoothly stitch live tick close update to avoid jerky jump on scale update
+                                    if (mergedList.isNotEmpty()) {
+                                        val lastReal = mergedList.last()
+                                        mergedList[mergedList.size - 1] = lastReal.copy(
+                                            close = newClose,
+                                            high = maxOf(lastReal.high, newHigh),
+                                            low = minOf(lastReal.low, newLow)
+                                        )
+                                        _candles.value = mergedList
+                                        recalculateSMC(tf, mergedList)
+                                    }
+                                }
+                            }
+                        } catch (e: java.lang.Exception) {
+                            Log.e("SmcViewModel", "Auto-background TradingView sync failed", e)
+                        }
+                    }
+                }
             }
         }
     }

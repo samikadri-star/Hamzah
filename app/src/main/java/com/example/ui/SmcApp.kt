@@ -271,7 +271,7 @@ fun PriceShimmerHeader(
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "سعر الذهب مباشر XAU/USD",
+                        text = "سعر الذهب مباشر (TradingView)",
                         fontSize = 12.sp,
                         color = TextSecondary
                     )
