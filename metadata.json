@@ -1,0 +1,6 @@
+{
+  "name": "تحليلات الذهب SMC",
+  "description": "تطبيق احترافي ذكي لتحليل أسعار وحركة الذهب (XAU/USD) بناءً على مفاهيم الأموال الذكية SMC والسيولة مع توصيات مدعومة بالذكاء الاصطناعي وحاسبة مخاطر.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
