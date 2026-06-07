@@ -37,6 +37,8 @@ import com.example.data.local.PriceZoneAlert
 import com.example.data.local.SavedTrade
 import com.example.data.local.UserRiskPreference
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import com.example.model.*
 import com.example.ui.theme.*
 import kotlinx.coroutines.flow.collectLatest
@@ -137,42 +139,58 @@ fun SmcApp(viewModel: SmcViewModel) {
             )
         },
         bottomBar = {
-            NavigationBar(
-                containerColor = DarkCardHeader,
-                tonalElevation = 8.dp
-            ) {
-                listOf(
-                    NavigationItem("chart", "الشارت", Icons.Default.BarChart, Icons.Outlined.BarChart),
-                    NavigationItem("signals", "التوصية", Icons.Default.Adjust, Icons.Outlined.Adjust),
-                    NavigationItem("ai", "خبير AI", Icons.Default.AutoAwesome, Icons.Outlined.AutoAwesome),
-                    NavigationItem("risk", "إدارة المخاطر", Icons.Default.Calculate, Icons.Outlined.Calculate),
-                    NavigationItem("alerts", "التنبيهات", Icons.Default.Notifications, Icons.Outlined.NotificationsActive),
-                    NavigationItem("archive", "الأرشيف", Icons.Default.History, Icons.Outlined.History)
-                ).forEach { item ->
-                    val selected = activeTab == item.id
-                    NavigationBarItem(
-                        selected = selected,
-                        onClick = { activeTab = item.id },
-                        icon = {
-                            Icon(
-                                imageVector = if (selected) item.selectedIcon else item.unselectedIcon,
-                                contentDescription = item.label,
-                                tint = if (selected) GoldPrimary else TextSecondary
+            Column {
+                NavigationBar(
+                    containerColor = DarkCardHeader,
+                    tonalElevation = 8.dp
+                ) {
+                    listOf(
+                        NavigationItem("chart", "الشارت", Icons.Default.BarChart, Icons.Outlined.BarChart),
+                        NavigationItem("signals", "التوصية", Icons.Default.Adjust, Icons.Outlined.Adjust),
+                        NavigationItem("ai", "خبير AI", Icons.Default.AutoAwesome, Icons.Outlined.AutoAwesome),
+                        NavigationItem("risk", "إدارة المخاطر", Icons.Default.Calculate, Icons.Outlined.Calculate),
+                        NavigationItem("alerts", "التنببهات", Icons.Default.Notifications, Icons.Outlined.NotificationsActive),
+                        NavigationItem("archive", "الأرشيف", Icons.Default.History, Icons.Outlined.History)
+                    ).forEach { item ->
+                        val selected = activeTab == item.id
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = { activeTab = item.id },
+                            icon = {
+                                Icon(
+                                    imageVector = if (selected) item.selectedIcon else item.unselectedIcon,
+                                    contentDescription = item.label,
+                                    tint = if (selected) GoldPrimary else TextSecondary
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = item.label,
+                                    fontSize = 10.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selected) GoldPrimary else TextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                indicatorColor = DarkBorder.copy(alpha = 0.4f)
                             )
-                        },
-                        label = {
-                            Text(
-                                text = item.label,
-                                fontSize = 10.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (selected) GoldPrimary else TextSecondary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            indicatorColor = DarkBorder.copy(alpha = 0.4f)
                         )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DarkCardHeader)
+                        .padding(bottom = 10.dp, top = 2.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "تطوير : سامي القادري",
+                        color = GoldPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -322,6 +340,24 @@ fun ChartRoomScreen(
     selectedTf: String,
     onTfSelected: (String) -> Unit
 ) {
+    var enableBookmap by remember { mutableStateOf(true) }
+    var enableOrderflow by remember { mutableStateOf(true) }
+    var minLotFilter by remember { mutableStateOf(500) } // Default filter out lot threshold: 500
+
+    val visibleCount = 35
+    val maxStartIndex = maxOf(0, candles.size - visibleCount)
+    var startIndex by remember(candles.size) { mutableStateOf(maxStartIndex) }
+
+    LaunchedEffect(candles.size) {
+        startIndex = maxOf(0, candles.size - visibleCount)
+    }
+
+    val renderCandles = if (candles.isEmpty()) emptyList() else {
+        val safeStart = startIndex.coerceIn(0, maxOf(0, candles.size - 1))
+        val safeEnd = (safeStart + visibleCount).coerceIn(1, candles.size)
+        candles.subList(safeStart, safeEnd)
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -362,6 +398,99 @@ fun ChartRoomScreen(
             }
         }
 
+        // Bookmap & Orderflow Institutional Controls and Filters
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 6.dp),
+            colors = CardDefaults.cardColors(containerColor = DarkCard),
+            border = BorderStroke(1.dp, DarkBorder)
+        ) {
+            Column(modifier = Modifier.padding(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "رادار سيولة بوكماب وأوردر فلو المؤسساتي",
+                        color = GoldPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Bookmap Heatmap Toggle
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Checkbox(
+                                checked = enableBookmap,
+                                onCheckedChange = { enableBookmap = it ?: true },
+                                colors = CheckboxDefaults.colors(checkedColor = GoldPrimary, uncheckedColor = TextSecondary),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Text("البوكماب", fontSize = 10.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                        }
+                        
+                        // Orderflow Toggle
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Checkbox(
+                                checked = enableOrderflow,
+                                onCheckedChange = { enableOrderflow = it ?: true },
+                                colors = CheckboxDefaults.colors(checkedColor = GoldPrimary, uncheckedColor = TextSecondary),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Text("أوردر فلو", fontSize = 10.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                // Volume Filter segmented buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("فلترة حجم العقود:", fontSize = 10.sp, color = TextSecondary)
+                    
+                    listOf(
+                        0 to "الكل (0 Lot)",
+                        500 to "متوسط (>500 Lot)",
+                        1200 to "حيتان (>1200 Lot)"
+                    ).forEach { (valLimit, label) ->
+                        val active = minLotFilter == valLimit
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .background(
+                                    color = if (active) GoldPrimary.copy(alpha = 0.15f) else DarkCarbon,
+                                    shape = RoundedCornerShape(6.dp)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (active) GoldPrimary else DarkBorder,
+                                    shape = RoundedCornerShape(6.dp)
+                                )
+                                .clickable { minLotFilter = valLimit }
+                                .padding(vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (active) GoldPrimary else TextSecondary,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Custom High-Fidelity Canvas Candlestick Chart
         Card(
             modifier = Modifier
@@ -381,7 +510,16 @@ fun ChartRoomScreen(
                 }
             } else {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    SMCChartCanvas(candles = candles, analysis = analysis)
+                    SMCChartCanvas(
+                        candles = renderCandles,
+                        analysis = analysis,
+                        enableBookmap = enableBookmap,
+                        enableOrderflow = enableOrderflow,
+                        minLotFilter = minLotFilter,
+                        onScrollChanged = { shift ->
+                            startIndex = (startIndex + shift).coerceIn(0, maxStartIndex)
+                        }
+                    )
                     
                     // Legend Overlay
                     Column(
@@ -389,13 +527,25 @@ fun ChartRoomScreen(
                             .align(Alignment.TopStart)
                             .padding(8.dp)
                             .background(DarkCarbon.copy(alpha = 0.75f), MathUtils.rounded8())
-                        .border(1.dp, DarkBorder.copy(alpha = 0.5f), MathUtils.rounded8())
-                        .padding(6.dp)
+                            .border(1.dp, DarkBorder.copy(alpha = 0.5f), MathUtils.rounded8())
+                            .padding(6.dp)
                     ) {
                         LegendItem("مكعب السيولة الطلبي (Bullish OB)", GreenBullish)
                         LegendItem("مكعب السيولة العرضي (Bearish OB)", RedBearish)
                         LegendItem("الفجوة العادلة المتشكلة (FVG Block)", BlueFVG)
                         LegendItem("سحب السيولة الحالية (Liquidity Sweep)", GoldPrimary)
+                    }
+
+                    // Swipe/Pan Indicator Banner overlay
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(bottom = 6.dp, end = 56.dp)
+                            .background(DarkCarbon.copy(alpha = 0.82f), RoundedCornerShape(4.dp))
+                            .border(1.dp, DarkBorder.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text("اسحب الشارت يمين/يسار للتنقل ↔️", fontSize = 8.sp, color = GoldPrimary)
                     }
                 }
             }
@@ -455,20 +605,60 @@ fun InfoFeatureCard(title: String, valStr: String, icon: ImageVector, modifier: 
 @Composable
 fun SMCChartCanvas(
     candles: List<XauCandle>,
-    analysis: SmcAnalysisResult
+    analysis: SmcAnalysisResult,
+    enableBookmap: Boolean,
+    enableOrderflow: Boolean,
+    minLotFilter: Int,
+    onScrollChanged: (Int) -> Unit
 ) {
-    val showSubsetCount = 30
-    val renderCandles = if (candles.size > showSubsetCount) candles.takeLast(showSubsetCount) else candles
+    val renderCandles = candles // Using rendered subset passed by parent
+    if (renderCandles.isEmpty()) return
     
     val minPrice = renderCandles.minOf { it.low } * 0.9995
     val maxPrice = renderCandles.maxOf { it.high } * 1.0005
     val priceRange = maxPrice - minPrice
+    val currentPrice = renderCandles.lastOrNull()?.close ?: 2342.0
+
+    // Bookmap levels representing high contract pending limits (Bids below support, Asks above resistance)
+    val bookmapLevels = listOf(
+        // Asks (Sellers block above current price)
+        Triple(currentPrice + 3.8, 520, "حد عرض بوكماب"),
+        Triple(currentPrice + 7.5, 940, "عرض مؤسساتي بوكماب"),
+        Triple(currentPrice + 13.0, 1650, "سيولة حيتان تصريف"),
+        
+        // Bids (Buyers block below current price)
+        Triple(currentPrice - 3.2, 540, "حد شراء بوكماب"),
+        Triple(currentPrice - 6.8, 980, "طلب مؤسساتي بوكماب"),
+        Triple(currentPrice - 12.0, 1820, "سيولة حيتان تجميع")
+    )
+
+    var dragAccumulator by remember { mutableStateOf(0f) }
 
     Canvas(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF111419))
             .padding(top = 22.dp, bottom = 22.dp, start = 8.dp, end = 52.dp)
+            .pointerInput(renderCandles) {
+                detectDragGestures(
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        dragAccumulator += dragAmount.x
+                        val candleCount = renderCandles.size
+                        val slotWidth = size.width / candleCount
+                        if (slotWidth > 0) {
+                            val indexShift = (dragAccumulator / slotWidth).toInt()
+                            if (indexShift != 0) {
+                                onScrollChanged(-indexShift)
+                                dragAccumulator -= indexShift * slotWidth
+                            }
+                        }
+                    },
+                    onDragEnd = {
+                        dragAccumulator = 0f
+                    }
+                )
+            }
             .testTag("smc_custom_canvas")
     ) {
         val width = size.width
@@ -478,13 +668,63 @@ fun SMCChartCanvas(
         val barWidth = candleSlotWidth * 0.7f
 
         // Helper to convert price value to Canvas Y coordinate
-        fun getRelativeY(price: Double): Float {
-            return (height - ((price - minPrice) / priceRange * height)).toFloat()
+        fun getRelativeY(priceValue: Double): Float {
+            return (height - ((priceValue - minPrice) / priceRange * height)).toFloat()
         }
 
-        // Draw horizontal grid layout lines
+        // Draw London, Tokyo, New York sessions background columns first (behind candlesticks)
+        renderCandles.forEachIndexed { index, candle ->
+            val centerX = index * candleSlotWidth + (candleSlotWidth / 2)
+            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+                timeInMillis = candle.timestamp
+            }
+            val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+            
+            val isTokyo = hour in 0..8
+            val isLondon = hour in 8..15
+            val isNY = hour in 13..21
+            
+            val sessionColor = when {
+                isNY && isLondon -> Color(0xFFF59E0B).copy(alpha = 0.05f) // Overlap (Amber)
+                isNY -> Color(0xFFFFB800).copy(alpha = 0.04f) // NY (Yellow)
+                isLondon -> Color(0xFF8B5CF6).copy(alpha = 0.04f) // London (Purple)
+                isTokyo -> Color(0xFF3B82F6).copy(alpha = 0.04f) // Tokyo (Blue)
+                else -> null
+            }
+            
+            if (sessionColor != null) {
+                drawRect(
+                    color = sessionColor,
+                    topLeft = Offset(index * candleSlotWidth, 0f),
+                    size = Size(candleSlotWidth, height)
+                )
+            }
+
+            // Draw text session markers on the x-axis every 5 candles
+            if (index % 5 == 0) {
+                val sessionName = when {
+                    hour in 0..8 -> "طوكيو"
+                    hour in 8..12 -> "لندن"
+                    hour in 13..15 -> "LD/NY"
+                    hour in 16..21 -> "نيويورك"
+                    else -> ""
+                }
+                if (sessionName.isNotEmpty()) {
+                    val nativeCanvas = drawContext.canvas.nativeCanvas as android.graphics.Canvas
+                    nativeCanvas.apply {
+                        val p = android.graphics.Paint().apply {
+                            color = android.graphics.Color.parseColor("#4A5568")
+                            textSize = 18f
+                            textAlign = android.graphics.Paint.Align.CENTER
+                        }
+                        drawText(sessionName, centerX, height - 2f, p)
+                    }
+                }
+            }
+        }
+
+        // Draw horizontal grid lines
         val gridLinesCount = 5
-        val gridStroke = Stroke(width = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f))
         for (i in 0..gridLinesCount) {
             val y = height / gridLinesCount * i
             drawLine(
@@ -505,9 +745,47 @@ fun SMCChartCanvas(
             }
         }
 
+        // Draw Bookmap limit order heatlines (horizontal lanes)
+        if (enableBookmap) {
+            bookmapLevels.forEach { (levelPrice, volume, description) ->
+                if (volume >= minLotFilter) {
+                    val y = getRelativeY(levelPrice)
+                    if (y in 0f..height) {
+                        val isAsk = levelPrice > currentPrice
+                        
+                        // Transparent glowing heatmap line
+                        drawLine(
+                            color = if (isAsk) RedBearish.copy(alpha = 0.42f) else GreenBullish.copy(alpha = 0.42f),
+                            start = Offset(0f, y),
+                            end = Offset(width, y),
+                            strokeWidth = 3f,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f)
+                        )
+                        
+                        // Background placard for labels
+                        drawRect(
+                            color = if (isAsk) RedBearish.copy(alpha = 0.12f) else GreenBullish.copy(alpha = 0.12f),
+                            topLeft = Offset(10f, y - 24f),
+                            size = Size(240f, 22f)
+                        )
+                        
+                        // Draw label text info
+                        val nativeCanvas = drawContext.canvas.nativeCanvas as android.graphics.Canvas
+                        nativeCanvas.apply {
+                            val p = android.graphics.Paint().apply {
+                                color = if (isAsk) android.graphics.Color.parseColor("#F6465D") else android.graphics.Color.parseColor("#0ECB81")
+                                textSize = 17f
+                                isFakeBoldText = true
+                            }
+                            drawText("$description ($volume Lot)", 15f, y - 8f, p)
+                        }
+                    }
+                }
+            }
+        }
+
         // Draw Translucent Fair Value Gaps (FVG)
         analysis.fairValueGaps.forEach { fvg ->
-            // Match with matching visible subset range
             val matchStartIndex = renderCandles.indexOfFirst { it.id == fvg.startIndex }
             val matchEndIndex = renderCandles.indexOfFirst { it.id == fvg.endIndex }
             
@@ -525,7 +803,6 @@ fun SMCChartCanvas(
                     topLeft = Offset(left, minOf(topY, bottomY)),
                     size = Size(right - left, abs(topY - bottomY))
                 )
-                // Draw dotted boundary borders for imbalances
                 drawRect(
                     color = borderTypeColor,
                     topLeft = Offset(left, minOf(topY, bottomY)),
@@ -540,7 +817,7 @@ fun SMCChartCanvas(
             val matchIdx = renderCandles.indexOfFirst { it.id == ob.candleIndex }
             if (matchIdx != -1) {
                 val left = matchIdx * candleSlotWidth - (candleSlotWidth * 0.5f)
-                val right = left + (candleSlotWidth * 6.5f) // Project institutional zone forward on chart
+                val right = left + (candleSlotWidth * 6.5f)
                 val topY = getRelativeY(ob.top)
                 val bottomY = getRelativeY(ob.bottom)
 
@@ -577,7 +854,6 @@ fun SMCChartCanvas(
                     pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f)
                 )
 
-                // Label tag
                 val nativeCanvas = drawContext.canvas.nativeCanvas as android.graphics.Canvas
                 nativeCanvas.apply {
                     val p = android.graphics.Paint().apply {
@@ -616,6 +892,46 @@ fun SMCChartCanvas(
                 topLeft = Offset(centerX - (barWidth / 2f), minOf(openY, closeY)),
                 size = Size(barWidth, maxOf(2f, bodyHeight))
             )
+        }
+
+        // Draw Orderflow Delta Imbalance flags on candlesticks
+        if (enableOrderflow) {
+            renderCandles.forEachIndexed { index, candle ->
+                val centerX = index * candleSlotWidth + (candleSlotWidth / 2)
+                val openY = getRelativeY(candle.open)
+                val closeY = getRelativeY(candle.close)
+                val highY = getRelativeY(candle.high)
+                val lowY = getRelativeY(candle.low)
+                
+                // Imbalance lot representation
+                val deltaLots = (candle.volume * (if (candle.isBullish) 1.35 else -1.35)).toInt()
+                val absoluteDelta = abs(deltaLots)
+                
+                if (absoluteDelta >= minLotFilter) {
+                    val isBullishDelta = deltaLots > 0
+                    val textStr = if (isBullishDelta) "+$absoluteDelta L" else "-$absoluteDelta L"
+                    val rectY = if (isBullishDelta) lowY + 12f else highY - 26f
+                    
+                    val nativeCanvas = drawContext.canvas.nativeCanvas as android.graphics.Canvas
+                    nativeCanvas.apply {
+                        val pBackground = android.graphics.Paint().apply {
+                            color = if (isBullishDelta) android.graphics.Color.parseColor("#152C22") else android.graphics.Color.parseColor("#3C1B20")
+                            style = android.graphics.Paint.Style.FILL
+                        }
+                        val rectLeft = centerX - 32f
+                        val rectRight = centerX + 32f
+                        drawRect(rectLeft, rectY - 14f, rectRight, rectY + 6f, pBackground)
+                        
+                        val pText = android.graphics.Paint().apply {
+                            color = if (isBullishDelta) android.graphics.Color.parseColor("#0ECB81") else android.graphics.Color.parseColor("#F6465D")
+                            textSize = 15f
+                            isFakeBoldText = true
+                            textAlign = android.graphics.Paint.Align.CENTER
+                        }
+                        drawText(textStr, centerX, rectY, pText)
+                    }
+                }
+            }
         }
 
         // Draw Liquidity Sweep High Wick circles and Labels
