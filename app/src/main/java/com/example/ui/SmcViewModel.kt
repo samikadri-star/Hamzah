@@ -496,6 +496,58 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
             _isAiLoading.value = false
         }
     }
+
+    // --- Gemini Liquidity & Supply/Demand Analysis State ---
+    private val _sndResult = MutableStateFlow<String>("")
+    val sndResult: StateFlow<String> = _sndResult.asStateFlow()
+
+    private val _isSndLoading = MutableStateFlow(false)
+    val isSndLoading: StateFlow<Boolean> = _isSndLoading.asStateFlow()
+
+    fun generateLiquiditySndAnalysis() {
+        val result = _analysisResult.value
+        val price = _currentPrice.value
+        val tf = _selectedTimeframe.value
+        if (result == null) return
+
+        _isSndLoading.value = true
+        _sndResult.value = ""
+
+        viewModelScope.launch {
+            val trendText = when (result.currentTrend) {
+                TrendStatus.BULLISH -> "صاعد مؤسساتي (شراء)"
+                TrendStatus.BEARISH -> "هابط مؤسساتي (بيع)"
+                else -> "عرضي حائر"
+            }
+
+            val demandObs = result.orderBlocks.filter { it.type == SmcType.BULLISH }
+                .take(3)
+                .joinToString("\n") { "- منطقة طلب (Demand Zone / OB) بين: ${String.format("%.2f", it.bottom)}$ و ${String.format("%.2f", it.top)}$ (مخففة: ${if (it.isMitigated) "نعم" else "لا"})" }
+                .ifEmpty { "- لا توجد مناطق طلب رئيسية مكتشفة حالياً في جغرافيا الشارت الحالية." }
+
+            val supplyObs = result.orderBlocks.filter { it.type == SmcType.BEARISH }
+                .take(3)
+                .joinToString("\n") { "- منطقة عرض (Supply Zone / OB) بين: ${String.format("%.2f", it.bottom)}$ و ${String.format("%.2f", it.top)}$ (مخففة: ${if (it.isMitigated) "نعم" else "لا"})" }
+                .ifEmpty { "- لا توجد مناطق عرض رئيسية مكتشفة حالياً في جغرافيا الشارت الحالية." }
+
+            val sweepsText = result.liquiditySweeps
+                .take(3)
+                .joinToString("\n") { "- ${it.description} عند سعر ${String.format("%.2f", it.price)}$" }
+                .ifEmpty { "- لم يتم تسجيل عمليات سحب سيولة عدائية حديثة مؤخراً." }
+
+            val response = GeminiSMCGenerator.generateSndAnalysis(
+                price = price,
+                timeframe = tf,
+                trend = trendText,
+                demandZones = demandObs,
+                supplyZones = supplyObs,
+                sweepsText = sweepsText
+            )
+
+            _sndResult.value = response
+            _isSndLoading.value = false
+        }
+    }
 }
 
 class SmcViewModelFactory(private val application: Application) : ViewModelProvider.Factory {

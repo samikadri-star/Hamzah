@@ -139,4 +139,67 @@ object GeminiSMCGenerator {
             "فشل استدعاء الذكاء الاصطناعي: ${e.localizedMessage}. يرجى التحقق من اتصال الإنترنت وصلاحية مفتاح API الخاص بك."
         }
     }
+
+    suspend fun generateSndAnalysis(
+        price: Double,
+        timeframe: String,
+        trend: String,
+        demandZones: String,
+        supplyZones: String,
+        sweepsText: String
+    ): String {
+        val apiKey = BuildConfig.GEMINI_API_KEY
+        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
+            return "تنبيه: مفتاح Gemini API غير مضبوط حالياً في إعدادات التطبيق. يرجى إدخال مفتاح الذكاء الاصطناعي في لوحة أسرار AI Studio للحصول على تحليلات الأسواق والأخبار المباشرة بالذكاء الاصطناعي."
+        }
+
+        val prompt = """
+            حلل السيولة وعلاقتها بمناطق العرض والطلب الحالية للذهب XAU/USD بناءً على المعطيات الفنية التالية:
+            - السعر اللحظي الحالي: ${String.format("%.2f", price)} $
+            - الفريم الزمني الحالي: $timeframe
+            - هيكل السوق العام: $trend
+            
+            [نقاط الطلب والدعم المكتشفة بالخوارزمية (Demand Zones)]:
+            $demandZones
+            
+            [نقاط العرض والمقاومة المكتشفة بالخوارزمية (Supply Zones)]:
+            $supplyZones
+            
+            [أحدث سحوبات السيولة (Liquidity Sweeps / Pools)]:
+            $sweepsText
+            
+            المطلوب كتقرير تحليلي عميق لخدمة متداولي التجزئة والمؤسسات:
+            1. (تحليل السيولة): أين تتركز سيولة السوق الحالية؟ هل يوجد مكافئ للسيولة (Equal Highs/Lows) وهل نتوقع سحب سيولة (Liquidity Sweep) قريباً؟
+            2. (مناطق العرض والطلب): قيم قوة مناطق العرض والطلب المذكورة أعلاه. أي منطقة تعتبر الأقوى للدخول (تبادل الأدوار ومناطق unmitigated)؟
+            3. (التوصية الاستراتيجية): حدد لنا توصية واضحة للغاية:
+               - نوع العملية (شراء أم بيع أم انتظار)
+               - منطقة الدخول المثالية (Optimal Entry Area)
+               - وقف الخسارة الصارم (Stop Loss)
+               - أهداف جني الأرباح (Take Profit 1 & Take Profit 2)
+               
+            تأكد من كتابة التقرير باللغة العربية بأسلوب احترافي رصين وجذاب للغاية ومقروء، مستخدماً علامات التنسيق والنقاط بوضوح تام.
+        """.trimIndent()
+
+        val systemPrompt = """
+            أنت كبير محللي السيولة ونظرية الـ SMC والأموال الذكية (SMC Lead Analyst) في بنك استثماري عالمي عريق.
+            تتميز بقدرتك المذهلة على قراءة الشارت مثل الخريطة الحية للأموال المتحركة، وتحديد تجمعات طلب الحيتان (Demand Blocks) ومستويات بيع الصناديق السيادية (Supply Zones)، وتوضيح سحوبات السيولة للتجزئة.
+            تقدم توصياتك بوضوح وحزم مع مبرراتها الصارمة لإدارة رأس المال.
+        """.trimIndent()
+
+        val request = GeminiRequest(
+            contents = listOf(
+                GeminiContent(parts = listOf(GeminiPart(text = prompt)))
+            ),
+            systemInstruction = GeminiContent(parts = listOf(GeminiPart(text = systemPrompt))),
+            generationConfig = GeminiGenerationConfig(temperature = 0.5f, maxOutputTokens = 1500)
+        )
+
+        return try {
+            val response = GeminiRetrofitClient.service.generateContent(apiKey, request)
+            response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text 
+                ?: "لم نتمكن من تلقي إجابة صحيحة من الذكاء الاصطناعي. يرجى المحاولة لاحقاً."
+        } catch (e: Exception) {
+            "فشل تحليل السيولة والعرض والطلب: ${e.localizedMessage}. يرجى التحقق من اتصال الإنترنت وصلاحية مفتاح مفتاح API."
+        }
+    }
 }

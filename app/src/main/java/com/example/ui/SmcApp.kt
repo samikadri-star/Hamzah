@@ -38,6 +38,7 @@ import com.example.data.local.SavedTrade
 import com.example.data.local.UserRiskPreference
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import com.example.model.*
 import com.example.ui.theme.*
@@ -58,6 +59,9 @@ fun SmcApp(viewModel: SmcViewModel) {
 
     val aiResult by viewModel.aiResult.collectAsStateWithLifecycle()
     val isAiLoading by viewModel.isAiLoading.collectAsStateWithLifecycle()
+
+    val sndResult by viewModel.sndResult.collectAsStateWithLifecycle()
+    val isSndLoading by viewModel.isSndLoading.collectAsStateWithLifecycle()
 
     var activeTab by remember { mutableStateOf("chart") }
     val scope = rememberCoroutineScope()
@@ -225,7 +229,10 @@ fun SmcApp(viewModel: SmcViewModel) {
                     "ai" -> AiAdvisorHubScreen(
                         resultText = aiResult,
                         isLoading = isAiLoading,
-                        onRequestAnalysis = { viewModel.generateAiAnalysis() }
+                        onRequestAnalysis = { viewModel.generateAiAnalysis() },
+                        sndResultText = sndResult,
+                        isSndLoading = isSndLoading,
+                        onRequestSndAnalysis = { viewModel.generateLiquiditySndAnalysis() }
                     )
                     "risk" -> RiskCalculatorScreen(
                         prefs = riskPref,
@@ -344,12 +351,12 @@ fun ChartRoomScreen(
     var enableOrderflow by remember { mutableStateOf(true) }
     var minLotFilter by remember { mutableStateOf(500) } // Default filter out lot threshold: 500
 
-    val visibleCount = 35
+    var visibleCount by remember { mutableStateOf(35) }
     val maxStartIndex = maxOf(0, candles.size - visibleCount)
-    var startIndex by remember(candles.size) { mutableStateOf(maxStartIndex) }
+    var startIndex by remember(candles.size, visibleCount) { mutableStateOf(maxStartIndex) }
 
-    LaunchedEffect(candles.size) {
-        startIndex = maxOf(0, candles.size - visibleCount)
+    LaunchedEffect(candles.size, visibleCount) {
+        startIndex = startIndex.coerceIn(0, maxOf(0, candles.size - visibleCount))
     }
 
     val renderCandles = if (candles.isEmpty()) emptyList() else {
@@ -518,6 +525,12 @@ fun ChartRoomScreen(
                         minLotFilter = minLotFilter,
                         onScrollChanged = { shift ->
                             startIndex = (startIndex + shift).coerceIn(0, maxStartIndex)
+                        },
+                        onZoomIn = {
+                            visibleCount = (visibleCount - 3).coerceIn(10, 100)
+                        },
+                        onZoomOut = {
+                            visibleCount = (visibleCount + 3).coerceIn(10, 100)
                         }
                     )
                     
@@ -534,6 +547,40 @@ fun ChartRoomScreen(
                         LegendItem("مكعب السيولة العرضي (Bearish OB)", RedBearish)
                         LegendItem("الفجوة العادلة المتشكلة (FVG Block)", BlueFVG)
                         LegendItem("سحب السيولة الحالية (Liquidity Sweep)", GoldPrimary)
+                    }
+
+                    // Tactical Zoom Control Overlay Panel
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .background(DarkCarbon.copy(alpha = 0.85f), MathUtils.rounded8())
+                            .border(1.dp, DarkBorder.copy(alpha = 0.5f), MathUtils.rounded8())
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        IconButton(
+                            onClick = { visibleCount = (visibleCount + 5).coerceIn(10, 100) },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.ZoomOut, contentDescription = "تصغير", tint = GoldPrimary, modifier = Modifier.size(16.dp))
+                        }
+                        
+                        Text(
+                            text = "النطاق: $visibleCount شمعة",
+                            color = TextPrimary,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 2.dp)
+                        )
+                        
+                        IconButton(
+                            onClick = { visibleCount = (visibleCount - 5).coerceIn(10, 100) },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.ZoomIn, contentDescription = "تكبير", tint = GoldPrimary, modifier = Modifier.size(16.dp))
+                        }
                     }
 
                     // Swipe/Pan Indicator Banner overlay
@@ -609,7 +656,9 @@ fun SMCChartCanvas(
     enableBookmap: Boolean,
     enableOrderflow: Boolean,
     minLotFilter: Int,
-    onScrollChanged: (Int) -> Unit
+    onScrollChanged: (Int) -> Unit,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit
 ) {
     val renderCandles = candles // Using rendered subset passed by parent
     if (renderCandles.isEmpty()) return
@@ -633,6 +682,7 @@ fun SMCChartCanvas(
     )
 
     var dragAccumulator by remember { mutableStateOf(0f) }
+    var zoomAccumulator by remember { mutableStateOf(1f) }
 
     Canvas(
         modifier = Modifier
@@ -640,24 +690,31 @@ fun SMCChartCanvas(
             .background(Color(0xFF111419))
             .padding(top = 22.dp, bottom = 22.dp, start = 8.dp, end = 52.dp)
             .pointerInput(renderCandles) {
-                detectDragGestures(
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        dragAccumulator += dragAmount.x
-                        val candleCount = renderCandles.size
-                        val slotWidth = size.width / candleCount
-                        if (slotWidth > 0) {
-                            val indexShift = (dragAccumulator / slotWidth).toInt()
-                            if (indexShift != 0) {
-                                onScrollChanged(-indexShift)
-                                dragAccumulator -= indexShift * slotWidth
-                            }
+                detectTransformGestures { centroid, pan, zoom, rotation ->
+                    // Zoom parsing
+                    if (zoom != 1f) {
+                        zoomAccumulator *= zoom
+                        if (zoomAccumulator > 1.15f) {
+                            onZoomIn()
+                            zoomAccumulator = 1f
+                        } else if (zoomAccumulator < 0.85f) {
+                            onZoomOut()
+                            zoomAccumulator = 1f
                         }
-                    },
-                    onDragEnd = {
-                        dragAccumulator = 0f
                     }
-                )
+                    
+                    // Pan parsing (horizontal scrolling)
+                    dragAccumulator += pan.x
+                    val candleCount = renderCandles.size
+                    val slotWidth = size.width / candleCount
+                    if (slotWidth > 0) {
+                        val indexShift = (dragAccumulator / slotWidth).toInt()
+                        if (indexShift != 0) {
+                            onScrollChanged(-indexShift)
+                            dragAccumulator -= indexShift * slotWidth
+                        }
+                    }
+                }
             }
             .testTag("smc_custom_canvas")
     ) {
@@ -1138,7 +1195,10 @@ fun TradingLevelRow(title: String, value: Double, color: Color) {
 fun AiAdvisorHubScreen(
     resultText: String,
     isLoading: Boolean,
-    onRequestAnalysis: () -> Unit
+    onRequestAnalysis: () -> Unit,
+    sndResultText: String,
+    isSndLoading: Boolean,
+    onRequestSndAnalysis: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier
@@ -1147,6 +1207,7 @@ fun AiAdvisorHubScreen(
             .testTag("ai_advisor_panel"),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Card 1: Federal & Macro Economic Advisor
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1240,6 +1301,107 @@ fun AiAdvisorHubScreen(
                                 color = TextPrimary,
                                 lineHeight = 21.sp,
                                 modifier = Modifier.testTag("ai_result_text")
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Card 2: Liquidity (Liquidity) & Supply/Demand (SND / OB) Advisor
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = DarkCard),
+                border = BorderStroke(1.dp, GreenBullish.copy(alpha = 0.3f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .background(GreenBullish.copy(alpha = 0.15f), RoundedCornerShape(50)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(imageVector = Icons.Default.Analytics, contentDescription = "SND", tint = GreenBullish, modifier = Modifier.size(28.dp))
+                    }
+                    Text(
+                        text = "رادار تحليل السيولة ونطاقات العرض والطلب المتقدم",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "يستخدم هذا الخيار المحلل اللغوي الفائق لربط مناطق وتجمعات العرض والطلب (Demand/Supply Blocks) وخطوط كسر ومصائد السيولة المكتشفة بالخوارزمية لتصميم سيناريو تداول دقيق الأمان والهدف.",
+                        fontSize = 11.sp,
+                        color = TextSecondary,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 16.sp
+                    )
+
+                    Button(
+                        onClick = onRequestSndAnalysis,
+                        enabled = !isSndLoading,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .testTag("request_snd_ai_button"),
+                        colors = ButtonDefaults.buttonColors(containerColor = GreenBullish),
+                        shape = MathUtils.rounded8()
+                    ) {
+                        if (isSndLoading) {
+                            CircularProgressIndicator(color = DarkCarbon, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(imageVector = Icons.Default.Troubleshoot, contentDescription = "SMC SND", tint = DarkCarbon)
+                                Text(text = "تحليل السيولة ومناطق العرض والطلب الفوري", color = DarkCarbon, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (isSndLoading || sndResultText.isNotEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = DarkCard),
+                    border = BorderStroke(1.dp, DarkBorder)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.QueryStats, contentDescription = "SND Report", tint = GreenBullish, modifier = Modifier.size(18.dp))
+                            Text(text = "تقرير هيكلية السيولة وعمق مناطق العرض والطلب اللحظي", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextAccent)
+                        }
+
+                        if (isSndLoading) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    CircularProgressIndicator(color = GreenBullish, modifier = Modifier.size(32.dp))
+                                    Text(text = "جاري تجميع مناطق الفجوات والعرض وخارطة السيولة لـ Gemini...", fontSize = 12.sp, color = TextSecondary)
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = sndResultText,
+                                fontSize = 13.sp,
+                                color = TextPrimary,
+                                lineHeight = 21.sp,
+                                modifier = Modifier.testTag("snd_ai_result_text")
                             )
                         }
                     }
