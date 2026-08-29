@@ -75,6 +75,110 @@ enum class TrendStatus {
     SIDEWAYS // جانبي
 }
 
+// --- Footprint & Delta Cluster Models (5M Timeframe) ---
+
+data class FootprintLevel(
+    val price: Double,
+    val bidVolume: Int,
+    val askVolume: Int,
+    val isPoc: Boolean = false,
+    val isBuyImbalance: Boolean = false,
+    val isSellImbalance: Boolean = false
+) {
+    val totalVolume: Int get() = bidVolume + askVolume
+    val delta: Int get() = askVolume - bidVolume
+}
+
+data class FootprintCandle(
+    val id: Int,
+    val candle: XauCandle,
+    val levels: List<FootprintLevel>,
+    val pocPrice: Double,
+    val totalDelta: Int,
+    val minDelta: Int,
+    val maxDelta: Int,
+    val totalVolume: Int,
+    val cumulativeDelta: Int,
+    val valueAreaHigh: Double,
+    val valueAreaLow: Double
+)
+
+// --- Bookmap Liquidity Heatmap Models ---
+
+enum class BookmapLevelType {
+    BID_WALL,    // جدار شراء مؤسساتي (حيتان)
+    ASK_WALL,    // جدار بيع ومقاومة سيولة (صناديق)
+    VOID_ZONE    // فراغ سيولة (تسارع محتمل)
+}
+
+data class BookmapLiquidityLevel(
+    val id: String,
+    val price: Double,
+    val lots: Int,
+    val type: BookmapLevelType,
+    val distancePoints: Double,
+    val strengthPercent: Int,
+    val isAbsorbing: Boolean = false
+)
+
+// --- Option Flow & Gamma Exposure Models ---
+
+enum class GammaRegime {
+    POSITIVE_GAMMA, // تثبيت أسعار وهدوء
+    NEGATIVE_GAMMA  // تسارع وانفجار سعري
+}
+
+data class OptionFlowAnalysis(
+    val callVolume: Long,
+    val putVolume: Long,
+    val putCallRatio: Double,
+    val maxPainStrike: Double,
+    val majorCallWall: Double,
+    val majorPutWall: Double,
+    val gammaRegime: GammaRegime,
+    val institutionalSentiment: String, // "ثوراني / صعودي قوي", "دببي / هبوطي", etc.
+    val unusualOptionActivities: List<String>
+)
+
+// --- Future Flow & Order Flow Delta Models ---
+
+data class FutureFlowAnalysis(
+    val aggressiveBuyContracts: Long,
+    val aggressiveSellContracts: Long,
+    val netDeltaContracts: Long,
+    val cumulativeDeltaTrend: String, // "صاعد بقوة", "هابط تصريفي"
+    val openInterestChange: Long,
+    val absorptionDetected: Boolean,
+    val institutionalDominance: String // "المشترون الحيتان 73%", "البائعون 68%"
+)
+
+// --- Smart Money Buy / Sell Levels & Confluence Recommendation ---
+
+data class SmartPriceZone(
+    val title: String,
+    val priceTop: Double,
+    val priceBottom: Double,
+    val idealEntry: Double,
+    val slPrice: Double,
+    val tp1: Double,
+    val tp2: Double,
+    val tp3: Double,
+    val confluenceScore: Int, // 1-100%
+    val reasonAr: String
+)
+
+data class SmartConfluenceRecommendation(
+    val primaryDirection: String, // "شراء ذكي (Smart Buy)" or "بيع ذكي (Smart Sell)" or "مراقبة سيولة (Wait)"
+    val spotPrice: Double,
+    val smartBuyZone: SmartPriceZone,
+    val smartSellZone: SmartPriceZone,
+    val overallConfluencePercent: Int,
+    val bookmapSummary: String,
+    val optionFlowSummary: String,
+    val futureFlowSummary: String,
+    val executionAdviceAr: String
+)
+
 data class SmcAnalysisResult(
     val timeframe: String,
     val currentTrend: TrendStatus,
@@ -84,7 +188,11 @@ data class SmcAnalysisResult(
     val structuralBreaks: List<StructureBreak>,
     val liquiditySweeps: List<LiquiditySweep>,
     val supplyDemandZones: List<SupplyDemandZone>,
-    val recommendation: TradeRecommendation?
+    val recommendation: TradeRecommendation?,
+    val bookmapLevels: List<BookmapLiquidityLevel> = emptyList(),
+    val optionFlow: OptionFlowAnalysis? = null,
+    val futureFlow: FutureFlowAnalysis? = null,
+    val smartRecommendation: SmartConfluenceRecommendation? = null
 )
 
 data class TradeRecommendation(
@@ -98,3 +206,25 @@ data class TradeRecommendation(
     val reasoningAr: String,
     val reasoningEn: String
 )
+
+// --- Local Institutional Notification Models ---
+
+enum class NotificationZoneType {
+    ORDER_BLOCK_DEMAND,
+    ORDER_BLOCK_SUPPLY,
+    LIQUIDITY_SWEEP,
+    BOOKMAP_WALL,
+    BOS_CHOCH_BREAK,
+    CUSTOM_PRICE_ALERT
+}
+
+data class NotificationLogItem(
+    val id: String,
+    val title: String,
+    val message: String,
+    val zoneType: NotificationZoneType,
+    val price: Double,
+    val timeframe: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+

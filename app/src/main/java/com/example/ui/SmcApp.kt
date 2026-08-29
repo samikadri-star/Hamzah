@@ -1,5 +1,8 @@
 package com.example.ui
 
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -44,15 +47,28 @@ import com.example.model.*
 import com.example.ui.theme.*
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SmcApp(viewModel: SmcViewModel) {
     val currentPrice by viewModel.currentPrice.collectAsStateWithLifecycle()
+    val dayHigh by viewModel.dayHigh.collectAsStateWithLifecycle()
+    val dayLow by viewModel.dayLow.collectAsStateWithLifecycle()
+    val dayChangeUsd by viewModel.dayChangeUsd.collectAsStateWithLifecycle()
+    val dayChangePercent by viewModel.dayChangePercent.collectAsStateWithLifecycle()
+    val tickDirection by viewModel.tickDirection.collectAsStateWithLifecycle()
+    val spotSpread by viewModel.spotSpread.collectAsStateWithLifecycle()
+
     val selectedTf by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
     val candles by viewModel.candles.collectAsStateWithLifecycle()
     val analysisResult by viewModel.analysisResult.collectAsStateWithLifecycle()
+    val footprintCandles by viewModel.footprintCandles.collectAsStateWithLifecycle()
+    val isFootprintLoading by viewModel.isFootprintLoading.collectAsStateWithLifecycle()
+
     val savedTrades by viewModel.savedTrades.collectAsStateWithLifecycle()
     val activeAlerts by viewModel.activeAlerts.collectAsStateWithLifecycle()
     val riskPref by viewModel.riskPreference.collectAsStateWithLifecycle()
@@ -62,6 +78,13 @@ fun SmcApp(viewModel: SmcViewModel) {
 
     val sndResult by viewModel.sndResult.collectAsStateWithLifecycle()
     val isSndLoading by viewModel.isSndLoading.collectAsStateWithLifecycle()
+
+    val enableOrderBlockAlerts by viewModel.enableOrderBlockAlerts.collectAsStateWithLifecycle()
+    val enableLiquidityAlerts by viewModel.enableLiquidityAlerts.collectAsStateWithLifecycle()
+    val enableBookmapAlerts by viewModel.enableBookmapAlerts.collectAsStateWithLifecycle()
+    val enableBosChochAlerts by viewModel.enableBosChochAlerts.collectAsStateWithLifecycle()
+    val isNotificationPermissionGranted by viewModel.isNotificationPermissionGranted.collectAsStateWithLifecycle()
+    val notificationHistoryLog by viewModel.notificationHistoryLog.collectAsStateWithLifecycle()
 
     var activeTab by remember { mutableStateOf("chart") }
     val scope = rememberCoroutineScope()
@@ -105,7 +128,7 @@ fun SmcApp(viewModel: SmcViewModel) {
                                 color = TextPrimary
                             )
                             Text(
-                                text = "تحليل التدفقات النقدية والمؤسساتية • XAU/USD",
+                                text = "تحليل التدفقات النقدية والمؤسساتية • XAU/USD Spot",
                                 fontSize = 11.sp,
                                 color = TextSecondary
                             )
@@ -150,10 +173,11 @@ fun SmcApp(viewModel: SmcViewModel) {
                 ) {
                     listOf(
                         NavigationItem("chart", "الشارت", Icons.Default.BarChart, Icons.Outlined.BarChart),
-                        NavigationItem("signals", "التوصية", Icons.Default.Adjust, Icons.Outlined.Adjust),
+                        NavigationItem("footprint", "فوت برنت 5M", Icons.Default.GridOn, Icons.Outlined.GridOn),
+                        NavigationItem("signals", "التوصيات", Icons.Default.Adjust, Icons.Outlined.Adjust),
                         NavigationItem("ai", "خبير AI", Icons.Default.AutoAwesome, Icons.Outlined.AutoAwesome),
-                        NavigationItem("risk", "إدارة المخاطر", Icons.Default.Calculate, Icons.Outlined.Calculate),
-                        NavigationItem("alerts", "التنببهات", Icons.Default.Notifications, Icons.Outlined.NotificationsActive),
+                        NavigationItem("risk", "المخاطر", Icons.Default.Calculate, Icons.Outlined.Calculate),
+                        NavigationItem("alerts", "التنبيهات", Icons.Default.Notifications, Icons.Outlined.NotificationsActive),
                         NavigationItem("archive", "الأرشيف", Icons.Default.History, Icons.Outlined.History)
                     ).forEach { item ->
                         val selected = activeTab == item.id
@@ -170,7 +194,7 @@ fun SmcApp(viewModel: SmcViewModel) {
                             label = {
                                 Text(
                                     text = item.label,
-                                    fontSize = 10.sp,
+                                    fontSize = 9.sp,
                                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                                     color = if (selected) GoldPrimary else TextSecondary,
                                     maxLines = 1,
@@ -206,8 +230,18 @@ fun SmcApp(viewModel: SmcViewModel) {
                 .padding(innerPadding)
                 .fillMaxSize()
         ) {
-            // Live Price Bar
-            PriceShimmerHeader(currentPrice = currentPrice, selectedTf = selectedTf, analysisResult = analysisResult)
+            // Live Spot Gold Price Bar with detailed Market Ticker
+            PriceShimmerHeader(
+                currentPrice = currentPrice,
+                dayHigh = dayHigh,
+                dayLow = dayLow,
+                dayChangeUsd = dayChangeUsd,
+                dayChangePercent = dayChangePercent,
+                tickDirection = tickDirection,
+                spotSpread = spotSpread,
+                selectedTf = selectedTf,
+                analysisResult = analysisResult
+            )
 
             // Dynamic screen selector
             Box(
@@ -222,9 +256,18 @@ fun SmcApp(viewModel: SmcViewModel) {
                         selectedTf = selectedTf,
                         onTfSelected = { viewModel.setTimeframe(it) }
                     )
-                    "signals" -> SignalsTerminalScreen(
+                    "footprint" -> FootprintScreen(
+                        footprintCandles = footprintCandles,
+                        currentPrice = currentPrice,
+                        isLoading = isFootprintLoading,
+                        onRefresh = { viewModel.refreshFootprintData() }
+                    )
+                    "signals" -> SmartSignalsScreen(
                         analysis = analysisResult,
-                        onSaveSignal = { viewModel.saveActiveSMCRecommendation() }
+                        currentPrice = currentPrice,
+                        onSaveSmartBuy = { viewModel.saveSmartConfluenceRecommendation(it, true) },
+                        onSaveSmartSell = { viewModel.saveSmartConfluenceRecommendation(it, false) },
+                        onSaveLegacySignal = { viewModel.saveActiveSMCRecommendation() }
                     )
                     "ai" -> AiAdvisorHubScreen(
                         resultText = aiResult,
@@ -243,7 +286,20 @@ fun SmcApp(viewModel: SmcViewModel) {
                         activeAlerts = activeAlerts,
                         currentPrice = currentPrice,
                         onAddAlert = { type, target -> viewModel.addNewCustomAlert(type, target) },
-                        onDeleteAlert = { viewModel.deleteAlert(it) }
+                        onDeleteAlert = { viewModel.deleteAlert(it) },
+                        enableOrderBlockAlerts = enableOrderBlockAlerts,
+                        enableLiquidityAlerts = enableLiquidityAlerts,
+                        enableBookmapAlerts = enableBookmapAlerts,
+                        enableBosChochAlerts = enableBosChochAlerts,
+                        isPermissionGranted = isNotificationPermissionGranted,
+                        notificationHistory = notificationHistoryLog,
+                        onToggleOrderBlockAlerts = { viewModel.toggleOrderBlockAlerts() },
+                        onToggleLiquidityAlerts = { viewModel.toggleLiquidityAlerts() },
+                        onToggleBookmapAlerts = { viewModel.toggleBookmapAlerts() },
+                        onToggleBosChochAlerts = { viewModel.toggleBosChochAlerts() },
+                        onSendTestNotification = { viewModel.sendTestNotification() },
+                        onClearNotificationHistory = { viewModel.clearNotificationHistoryLog() },
+                        onRefreshPermission = { viewModel.checkAndRefreshNotificationPermission() }
                     )
                     "archive" -> ArchiveHistoryScreen(
                         trades = savedTrades,
@@ -256,7 +312,6 @@ fun SmcApp(viewModel: SmcViewModel) {
         }
     }
 }
-
 
 data class NavigationItem(
     val id: String,
@@ -276,64 +331,116 @@ object MathUtils {
 @Composable
 fun PriceShimmerHeader(
     currentPrice: Double,
+    dayHigh: Double,
+    dayLow: Double,
+    dayChangeUsd: Double,
+    dayChangePercent: Double,
+    tickDirection: Int,
+    spotSpread: Double,
     selectedTf: String,
     analysisResult: SmcAnalysisResult?
 ) {
+    val isPositive = dayChangeUsd >= 0
+    val tickColor = if (tickDirection > 0) GreenBullish else if (tickDirection < 0) RedBearish else GoldPrimary
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(8.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .testTag("spot_gold_price_card"),
         colors = CardDefaults.cardColors(containerColor = DarkCard),
-        border = BorderStroke(1.dp, DarkBorder)
+        border = BorderStroke(1.2.dp, GoldPrimary.copy(alpha = 0.5f))
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
+        Column(modifier = Modifier.padding(10.dp)) {
+            // Row 1: Ticker Name, Spot Badge & Status
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .background(GoldPrimary.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(text = "XAU/USD", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = GoldPrimary)
+                    }
                     Text(
-                        text = "سعر الذهب مباشر (TradingView)",
-                        fontSize = 12.sp,
-                        color = TextSecondary
+                        text = "الذهب الفوري Spot (TradingView)",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
                     )
                     Box(
                         modifier = Modifier
-                            .size(6.dp)
-                            .background(GreenBullish, RoundedCornerShape(50))
+                            .size(7.dp)
+                            .background(tickColor, RoundedCornerShape(50))
                     )
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "$${String.format("%.2f", currentPrice)}",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = GoldPrimary,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
 
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = "حالة سوق المؤسسات ($selectedTf)",
-                    fontSize = 11.sp,
-                    color = TextSecondary
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                val stateText = when(analysisResult?.marketState) {
+                val stateText = when (analysisResult?.marketState) {
                     MarketState.ACCUMULATION -> "تجميع حيتان 📥"
                     MarketState.DISTRIBUTION -> "تصريف بيع 📤"
                     else -> "توزيع طبيعي ⚖️"
                 }
                 Text(
                     text = stateText,
-                    fontSize = 13.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = GoldPrimary
                 )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Row 2: Live Price, 24h Change, Range
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "$${String.format("%.2f", currentPrice)}",
+                        fontSize = 25.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = GoldPrimary,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Box(
+                        modifier = Modifier
+                            .padding(bottom = 4.dp)
+                            .background(
+                                color = if (isPositive) GreenBullish.copy(alpha = 0.15f) else RedBearish.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "${if (isPositive) "+" else ""}${String.format("%.2f", dayChangeUsd)}$ (${if (isPositive) "+" else ""}${String.format("%.2f", dayChangePercent)}%)",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isPositive) GreenBullish else RedBearish,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+
+                // High / Low / Spread
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(text = "أعلى: $${String.format("%.1f", dayHigh)}", fontSize = 10.sp, color = GreenBullish, fontFamily = FontFamily.Monospace)
+                        Text(text = "أدنى: $${String.format("%.1f", dayLow)}", fontSize = 10.sp, color = RedBearish, fontFamily = FontFamily.Monospace)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .background(DarkCarbon, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 5.dp, vertical = 3.dp)
+                    ) {
+                        Text(text = "السبريد ${String.format("%.2f", spotSpread)}$", fontSize = 9.sp, color = TextSecondary)
+                    }
+                }
             }
         }
     }
@@ -1584,24 +1691,201 @@ fun CalculatorOutputRow(title: String, value: String, color: Color) {
     }
 }
 
-// --- Screen 5: Smart Alerts Screen ---
+// --- Screen 5: Institutional Notification Management & Smart Alerts Screen ---
 @Composable
 fun SmartAlertsScreen(
     activeAlerts: List<PriceZoneAlert>,
     currentPrice: Double,
     onAddAlert: (String, Double) -> Unit,
-    onDeleteAlert: (Int) -> Unit
+    onDeleteAlert: (Int) -> Unit,
+    enableOrderBlockAlerts: Boolean,
+    enableLiquidityAlerts: Boolean,
+    enableBookmapAlerts: Boolean,
+    enableBosChochAlerts: Boolean,
+    isPermissionGranted: Boolean,
+    notificationHistory: List<NotificationLogItem>,
+    onToggleOrderBlockAlerts: () -> Unit,
+    onToggleLiquidityAlerts: () -> Unit,
+    onToggleBookmapAlerts: () -> Unit,
+    onToggleBosChochAlerts: () -> Unit,
+    onSendTestNotification: () -> Unit,
+    onClearNotificationHistory: () -> Unit,
+    onRefreshPermission: () -> Unit
 ) {
     var customPriceInput by remember { mutableStateOf(String.format("%.2f", currentPrice)) }
     var selectedType by remember { mutableStateOf("PRICE_ABOVE") }
+
+    // Launcher for Android 13+ POST_NOTIFICATIONS permission request
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        onRefreshPermission()
+    }
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(12.dp)
             .testTag("smart_alerts_screen"),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // 1. Notification Service Status & Permission Card
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("notification_permission_status_card"),
+                colors = CardDefaults.cardColors(containerColor = DarkCardHeader),
+                border = BorderStroke(1.2.dp, if (isPermissionGranted) GoldPrimary else RedBearish)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPermissionGranted) Icons.Default.NotificationsActive else Icons.Default.NotificationsOff,
+                                contentDescription = "Notification Status",
+                                tint = if (isPermissionGranted) GoldPrimary else RedBearish,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "حارس الإشعارات المؤسساتية المحلي",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary
+                                )
+                                Text(
+                                    text = if (isPermissionGranted) "نظام الإشعارات مفعل (قنوات عالية الأهمية)" else "صلاحية الإشعارات معطلة بنظام الهاتف",
+                                    fontSize = 11.sp,
+                                    color = if (isPermissionGranted) GreenBullish else RedBearish
+                                )
+                            }
+                        }
+
+                        if (!isPermissionGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            Button(
+                                onClick = {
+                                    permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = GoldPrimary),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                shape = MathUtils.rounded8()
+                            ) {
+                                Text(text = "منح الإذن", color = DarkCarbon, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Divider(color = DarkBorder)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "اختبار جرس التنبيه واهتزاز الهاتف عند ملامسة الصفقات:",
+                            fontSize = 11.sp,
+                            color = TextSecondary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = onSendTestNotification,
+                            colors = ButtonDefaults.buttonColors(containerColor = DarkBorder),
+                            shape = MathUtils.rounded8(),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("send_test_notification_button")
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Icon(imageVector = Icons.Default.VolumeUp, contentDescription = "Test Sound", tint = GoldPrimary, modifier = Modifier.size(14.dp))
+                                Text(text = "إشعار تجريبي", fontSize = 11.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Institutional Alert Channels Control Center
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("notification_channels_card"),
+                colors = CardDefaults.cardColors(containerColor = DarkCard),
+                border = BorderStroke(1.dp, DarkBorder)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "مركز التحكم بقنوات رصد السيولة والمناطق",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextAccent
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "تحديد أنواع المناطق الحرجة التي تطلق إشعارات فورية عند وصول سعر الذهب إليها:",
+                        fontSize = 11.sp,
+                        color = TextSecondary
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    NotificationToggleRow(
+                        title = "ملامسة مناطق الطلب والعرض (Order Blocks)",
+                        subtitle = "إشعار فوري عند دخول السعر نطاق [Demand OB / Supply OB]",
+                        icon = Icons.Default.Shield,
+                        iconTint = GreenBullish,
+                        isChecked = enableOrderBlockAlerts,
+                        onCheckedChange = { onToggleOrderBlockAlerts() }
+                    )
+
+                    Divider(color = DarkBorder, modifier = Modifier.padding(vertical = 8.dp))
+
+                    NotificationToggleRow(
+                        title = "سحب السيولة وتجمعات الأوامر (Liquidity Sweeps)",
+                        subtitle = "إشعار عند كسر وسحب سيولة القمم (BSL) أو القيعان (SSL)",
+                        icon = Icons.Default.Bolt,
+                        iconTint = GoldPrimary,
+                        isChecked = enableLiquidityAlerts,
+                        onCheckedChange = { onToggleLiquidityAlerts() }
+                    )
+
+                    Divider(color = DarkBorder, modifier = Modifier.padding(vertical = 8.dp))
+
+                    NotificationToggleRow(
+                        title = "جدران أوامر البوكماب (Bookmap Limit Walls)",
+                        subtitle = "إشعار عند اقتراب السعر من كتل أوامر الحيتان والصناديق الضخمة",
+                        icon = Icons.Default.Layers,
+                        iconTint = Color(0xFF64B5F6),
+                        isChecked = enableBookmapAlerts,
+                        onCheckedChange = { onToggleBookmapAlerts() }
+                    )
+
+                    Divider(color = DarkBorder, modifier = Modifier.padding(vertical = 8.dp))
+
+                    NotificationToggleRow(
+                        title = "كسور الهيكل وتغيير الاتجاه (BOS / CHOCH)",
+                        subtitle = "إشعار عند تأكيد اختراق هيكلي جديد على فريم التداول",
+                        icon = Icons.Default.ShowChart,
+                        iconTint = Color(0xFFFFB74D),
+                        isChecked = enableBosChochAlerts,
+                        onCheckedChange = { onToggleBosChochAlerts() }
+                    )
+                }
+            }
+        }
+
+        // 3. Custom Price Alert Form
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1609,14 +1893,14 @@ fun SmartAlertsScreen(
                 border = BorderStroke(1.dp, DarkBorder)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(text = "إضافة تنبيه سعر ذكي (XAU/USD)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextAccent)
+                    Text(text = "إضافة تنبيه سعر مخصص (XAU/USD)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextAccent)
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Alert Type Grid Selection
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 12.dp),
+                            .padding(bottom = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         AlertSelectorButton("عند الصعود فوق", "PRICE_ABOVE", selectedType, Modifier.weight(1f)) { selectedType = it }
@@ -1626,7 +1910,7 @@ fun SmartAlertsScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 16.dp),
+                            .padding(bottom = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         AlertSelectorButton("سحب سيولة SMC", "LIQUIDITY_SWEEP", selectedType, Modifier.weight(1f)) { selectedType = it }
@@ -1652,22 +1936,6 @@ fun SmartAlertsScreen(
                         )
                     }
 
-                    // Simulated alert preferences
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(text = "منصات استلام التنبيهات المربوطة:", fontSize = 11.sp, color = TextSecondary)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            AlertBadge("Push", true)
-                            AlertBadge("Telegram", true)
-                            AlertBadge("Email", false)
-                        }
-                    }
-
                     Button(
                         onClick = {
                             val price = customPriceInput.toDoubleOrNull() ?: currentPrice
@@ -1679,15 +1947,59 @@ fun SmartAlertsScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = GoldPrimary),
                         shape = MathUtils.rounded8()
                     ) {
-                        Text(text = "تفعيل حارس التنبيهات الذكي", color = DarkCarbon, fontWeight = FontWeight.Bold)
+                        Text(text = "تفعيل حارس التنبيهات المخصص", color = DarkCarbon, fontWeight = FontWeight.Bold)
                     }
                 }
             }
         }
 
-        // Active Alerts Log
+        // 4. Live Institutional Notifications Log
         item {
-            Text(text = "قائمة التنبيهات النشطة والمنفذة", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Icon(imageVector = Icons.Default.History, contentDescription = "Log", tint = GoldPrimary, modifier = Modifier.size(18.dp))
+                    Text(text = "سجل الإشعارات المؤسساتية الحية", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                }
+
+                if (notificationHistory.isNotEmpty()) {
+                    TextButton(onClick = onClearNotificationHistory) {
+                        Text(text = "مسح السجل", color = RedBearish, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+
+        if (notificationHistory.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = DarkCard),
+                    border = BorderStroke(1.dp, DarkBorder)
+                ) {
+                    Box(modifier = Modifier.padding(20.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "لا توجد إشعارات مناطق مسجلة بعد. عند ملامسة السعر لأي منطقة طلب/عرض أو جدار سيولة ستسجل فورياً هنا مع إطلاق إشعار الهاتف.",
+                            fontSize = 11.sp,
+                            color = TextSecondary,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+        } else {
+            items(notificationHistory) { item ->
+                NotificationHistoryCard(item)
+            }
+        }
+
+        // 5. Active User Alerts
+        item {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(text = "التنبيهات السعرية المخصصة النشطة", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
         }
 
         if (activeAlerts.isEmpty()) {
@@ -1697,8 +2009,8 @@ fun SmartAlertsScreen(
                     colors = CardDefaults.cardColors(containerColor = DarkCard),
                     border = BorderStroke(1.dp, DarkBorder)
                 ) {
-                    Box(modifier = Modifier.padding(24.dp), contentAlignment = Alignment.Center) {
-                        Text(text = "لا توجد تنبيهات سعر نشطة حالياً. ستظهر التنبيهات هنا فور إضافتها.", fontSize = 12.sp, color = TextSecondary, textAlign = TextAlign.Center)
+                    Box(modifier = Modifier.padding(18.dp), contentAlignment = Alignment.Center) {
+                        Text(text = "لا توجد تنبيهات سعرية مخصصة حالياً.", fontSize = 11.sp, color = TextSecondary, textAlign = TextAlign.Center)
                     }
                 }
             }
@@ -1724,7 +2036,7 @@ fun SmartAlertsScreen(
                                         .background(if (alert.isTriggered) GoldPrimary else TextSecondary, RoundedCornerShape(50))
                                 )
                                 Text(
-                                    text = if (alert.isTriggered) "تنبيه منفذ 🔔" else "قيد الانتظار ⏳",
+                                    text = if (alert.isTriggered) "تنبيه تم تنفيذه 🔔" else "قيد الانتظار ⏳",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (alert.isTriggered) GoldPrimary else TextSecondary
@@ -1741,6 +2053,115 @@ fun SmartAlertsScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun NotificationToggleRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    iconTint: Color,
+    isChecked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(iconTint.copy(alpha = 0.12f), RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(imageVector = icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(18.dp))
+            }
+
+            Column {
+                Text(text = title, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                Text(text = subtitle, fontSize = 10.sp, color = TextSecondary, maxLines = 2)
+            }
+        }
+
+        Switch(
+            checked = isChecked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = DarkCarbon,
+                checkedTrackColor = GoldPrimary,
+                uncheckedThumbColor = TextSecondary,
+                uncheckedTrackColor = DarkBorder
+            )
+        )
+    }
+}
+
+@Composable
+fun NotificationHistoryCard(item: NotificationLogItem) {
+    val (badgeColor, badgeText, icon) = when (item.zoneType) {
+        NotificationZoneType.ORDER_BLOCK_DEMAND -> Triple(GreenBullish, "طلب Demand OB", Icons.Default.TrendingUp)
+        NotificationZoneType.ORDER_BLOCK_SUPPLY -> Triple(RedBearish, "عرض Supply OB", Icons.Default.TrendingDown)
+        NotificationZoneType.LIQUIDITY_SWEEP -> Triple(GoldPrimary, "سحب سيولة Sweep", Icons.Default.Bolt)
+        NotificationZoneType.BOOKMAP_WALL -> Triple(Color(0xFF64B5F6), "جدار بوكماب Wall", Icons.Default.Layers)
+        NotificationZoneType.BOS_CHOCH_BREAK -> Triple(Color(0xFFFFB74D), "كسر هيكلي Break", Icons.Default.ShowChart)
+        NotificationZoneType.CUSTOM_PRICE_ALERT -> Triple(TextAccent, "هدف مخصص Target", Icons.Default.Notifications)
+    }
+
+    val timeFormatted = remember(item.timestamp) {
+        try {
+            SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(item.timestamp))
+        } catch (e: Exception) {
+            "--:--"
+        }
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("notification_history_card_${item.id}"),
+        colors = CardDefaults.cardColors(containerColor = DarkCardHeader),
+        border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.4f))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .background(badgeColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(text = badgeText, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = badgeColor)
+                    }
+                    Text(text = item.title, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                }
+
+                Text(text = timeFormatted, fontSize = 10.sp, color = TextSecondary)
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(text = item.message, fontSize = 11.sp, color = TextSecondary)
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = "سعر الرصد: ${String.format("%.2f", item.price)}$", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GoldPrimary)
+                Text(text = "فريم: ${item.timeframe}", fontSize = 10.sp, color = TextSecondary)
             }
         }
     }

@@ -8,18 +8,18 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.SmcAnalyzer
 import com.example.data.api.GeminiSMCGenerator
-import com.example.data.api.YahooFinanceService
+import com.example.data.api.TradingViewService
 import com.example.data.local.*
+import com.example.data.notification.SmcNotificationManager
 import com.example.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.*
-import kotlin.random.Random
 import kotlin.math.abs
+import kotlin.math.roundToInt
+import kotlin.random.Random
 
 class SmcViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -27,6 +27,26 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
     private val savedTradeDao = db.savedTradeDao()
     private val alertDao = db.priceZoneAlertDao()
     private val riskDao = db.userRiskPreferenceDao()
+    val notificationManager = SmcNotificationManager(application)
+
+    // --- Notification Toggles & States ---
+    private val _enableOrderBlockAlerts = MutableStateFlow(true)
+    val enableOrderBlockAlerts: StateFlow<Boolean> = _enableOrderBlockAlerts.asStateFlow()
+
+    private val _enableLiquidityAlerts = MutableStateFlow(true)
+    val enableLiquidityAlerts: StateFlow<Boolean> = _enableLiquidityAlerts.asStateFlow()
+
+    private val _enableBookmapAlerts = MutableStateFlow(true)
+    val enableBookmapAlerts: StateFlow<Boolean> = _enableBookmapAlerts.asStateFlow()
+
+    private val _enableBosChochAlerts = MutableStateFlow(true)
+    val enableBosChochAlerts: StateFlow<Boolean> = _enableBosChochAlerts.asStateFlow()
+
+    private val _isNotificationPermissionGranted = MutableStateFlow(notificationManager.hasNotificationPermission())
+    val isNotificationPermissionGranted: StateFlow<Boolean> = _isNotificationPermissionGranted.asStateFlow()
+
+    private val _notificationHistoryLog = MutableStateFlow<List<NotificationLogItem>>(emptyList())
+    val notificationHistoryLog: StateFlow<List<NotificationLogItem>> = _notificationHistoryLog.asStateFlow()
 
     // --- Timeframe State ---
     val timeframes = listOf("1m", "5m", "15m", "1H", "4H", "Daily")
@@ -39,12 +59,41 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
     private val _candles = MutableStateFlow<List<XauCandle>>(emptyList())
     val candles: StateFlow<List<XauCandle>> = _candles.asStateFlow()
 
-    private val _currentPrice = MutableStateFlow(2342.50)
+    // --- Live Spot Gold Price & Market Ticker Stats (XAU/USD Spot) ---
+    private val _currentPrice = MutableStateFlow(2514.80)
     val currentPrice: StateFlow<Double> = _currentPrice.asStateFlow()
+
+    private val _openPrice = MutableStateFlow(2502.30)
+    val openPrice: StateFlow<Double> = _openPrice.asStateFlow()
+
+    private val _dayHigh = MutableStateFlow(2522.60)
+    val dayHigh: StateFlow<Double> = _dayHigh.asStateFlow()
+
+    private val _dayLow = MutableStateFlow(2496.10)
+    val dayLow: StateFlow<Double> = _dayLow.asStateFlow()
+
+    private val _dayChangeUsd = MutableStateFlow(12.50)
+    val dayChangeUsd: StateFlow<Double> = _dayChangeUsd.asStateFlow()
+
+    private val _dayChangePercent = MutableStateFlow(0.50)
+    val dayChangePercent: StateFlow<Double> = _dayChangePercent.asStateFlow()
+
+    private val _tickDirection = MutableStateFlow(1) // +1: Up Green, -1: Down Red, 0: Neutral
+    val tickDirection: StateFlow<Int> = _tickDirection.asStateFlow()
+
+    private val _spotSpread = MutableStateFlow(0.18) // Typical spot gold spread in USD
+    val spotSpread: StateFlow<Double> = _spotSpread.asStateFlow()
 
     // --- SMC Analysis Result ---
     private val _analysisResult = MutableStateFlow<SmcAnalysisResult?>(null)
     val analysisResult: StateFlow<SmcAnalysisResult?> = _analysisResult.asStateFlow()
+
+    // --- Dedicated 5M Footprint & Delta Analysis ---
+    private val _footprintCandles = MutableStateFlow<List<FootprintCandle>>(emptyList())
+    val footprintCandles: StateFlow<List<FootprintCandle>> = _footprintCandles.asStateFlow()
+
+    private val _isFootprintLoading = MutableStateFlow(false)
+    val isFootprintLoading: StateFlow<Boolean> = _isFootprintLoading.asStateFlow()
 
     // --- Persisted Database Data StateFlows ---
     val savedTrades: StateFlow<List<SavedTrade>> = savedTradeDao.getAllSavedTrades()
@@ -67,6 +116,13 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
     private val _isAiLoading = MutableStateFlow(false)
     val isAiLoading: StateFlow<Boolean> = _isAiLoading.asStateFlow()
 
+    // --- Gemini Liquidity & Supply/Demand Analysis State ---
+    private val _sndResult = MutableStateFlow<String>("")
+    val sndResult: StateFlow<String> = _sndResult.asStateFlow()
+
+    private val _isSndLoading = MutableStateFlow(false)
+    val isSndLoading: StateFlow<Boolean> = _isSndLoading.asStateFlow()
+
     // --- In-App Message Alerts ---
     private val _uiNotification = MutableSharedFlow<String>()
     val uiNotification: SharedFlow<String> = _uiNotification.asSharedFlow()
@@ -75,19 +131,22 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
     private var liveUpdateJob: Job? = null
 
     init {
-        // 1. Generate core historic candle databases for all timeframes
+        // 1. Generate base realistic spot gold structure for all timeframes
         generateAllTimeframeHistories()
-        
+
         // 2. Load default timeframe candles
         loadTimeframeCandles(_selectedTimeframe.value)
 
-        // 3. Start live price simulator and auto background TradingView sync
+        // 3. Generate initial 5M Footprint dataset
+        generateInitialFootprintData()
+
+        // 4. Start live price simulator & auto background TradingView Spot sync
         startLiveTickingService()
 
-        // 4. Trigger active background fetching of all timeframes from Yahoo Finance (TradingView spot index GC=F)
+        // 5. Trigger active background fetching of all timeframes from TradingView Spot
         triggerAllTimeframesRealDataFetch()
 
-        // 5. Set first risk model defaults to DB if empty
+        // 6. Set first risk model defaults to DB if empty
         viewModelScope.launch(Dispatchers.IO) {
             if (riskDao.getRiskPreferenceSync() == null) {
                 riskDao.saveRiskPreference(UserRiskPreference())
@@ -97,21 +156,21 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun generateAllTimeframeHistories() {
         val basePrices = mapOf(
-            "1m" to 2340.50,
-            "5m" to 2338.00,
-            "15m" to 2342.20,
-            "1H" to 2345.10,
-            "4H" to 2330.00,
-            "Daily" to 2310.00
+            "1m" to 2514.20,
+            "5m" to 2512.80,
+            "15m" to 2514.50,
+            "1H" to 2518.10,
+            "4H" to 2505.00,
+            "Daily" to 2480.00
         )
-        
+
         timeframes.forEach { tf ->
             val count = 50
-            val startPrice = basePrices[tf] ?: 2340.00
+            val startPrice = basePrices[tf] ?: 2514.00
             val candleList = mutableListOf<XauCandle>()
             var currentClose = startPrice
-            
-            val random = Random(tf.hashCode()) // Consistent base data per TF
+
+            val random = Random(tf.hashCode())
             val timeOffset = when (tf) {
                 "1m" -> 60000L
                 "5m" -> 300000L
@@ -120,11 +179,11 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
                 "4H" -> 14400000L
                 else -> 86400000L
             }
-            
+
             val baseTime = System.currentTimeMillis() - (count * timeOffset)
 
             for (i in 0 until count) {
-                val change = (random.nextDouble() - 0.48) * when(tf) {
+                val change = (random.nextDouble() - 0.47) * when (tf) {
                     "1m" -> 1.5
                     "5m" -> 3.2
                     "15m" -> 6.5
@@ -134,11 +193,10 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val o = currentClose
                 val c = currentClose + change
-                
-                // Keep gold price realistic
-                val h = maxOf(o, c) + (random.nextDouble() * when(tf) { "1m" -> 0.8; "5m" -> 1.5; "15m" -> 3.0; else -> 8.0 })
-                val l = minOf(o, c) - (random.nextDouble() * when(tf) { "1m" -> 0.8; "5m" -> 1.5; "15m" -> 3.0; else -> 8.0 })
-                
+
+                val h = maxOf(o, c) + (random.nextDouble() * when (tf) { "1m" -> 0.8; "5m" -> 1.5; "15m" -> 3.0; else -> 8.0 })
+                val l = minOf(o, c) - (random.nextDouble() * when (tf) { "1m" -> 0.8; "5m" -> 1.5; "15m" -> 3.0; else -> 8.0 })
+
                 candleList.add(
                     XauCandle(
                         id = i,
@@ -156,6 +214,13 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun generateInitialFootprintData() {
+        val candles5m = timeframeCandles["5m"] ?: emptyList()
+        if (candles5m.isNotEmpty()) {
+            _footprintCandles.value = SmcAnalyzer.generateFootprintCandles(candles5m.takeLast(25))
+        }
+    }
+
     fun setTimeframe(tf: String) {
         if (_selectedTimeframe.value == tf) return
         _selectedTimeframe.value = tf
@@ -166,53 +231,66 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
         val currentList = timeframeCandles[tf] ?: emptyList()
         if (currentList.isNotEmpty()) {
             _candles.value = currentList
-            _currentPrice.value = currentList.last().close
+            updatePriceMetrics(currentList.last().close)
             recalculateSMC(tf, currentList)
         }
-        
-        // Fetch up-to-date real market candles from TradingView index asynchronously (zero UI lag)
+
+        // Fetch up-to-date real market candles from TradingView Spot asynchronously
         fetchLiveCandles(tf)
     }
 
     private fun fetchLiveCandles(tf: String) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val realCandles = YahooFinanceService.fetchGoldCandles(tf)
+                val realCandles = TradingViewService.fetchSpotGoldCandles(tf)
                 if (realCandles.isNotEmpty()) {
                     timeframeCandles[tf] = realCandles
                     if (_selectedTimeframe.value == tf) {
                         _candles.value = realCandles
-                        _currentPrice.value = realCandles.last().close
+                        updatePriceMetrics(realCandles.last().close)
                         recalculateSMC(tf, realCandles)
+                    }
+                    if (tf == "5m") {
+                        _footprintCandles.value = SmcAnalyzer.generateFootprintCandles(realCandles.takeLast(25))
                     }
                 }
             } catch (e: Exception) {
-                Log.e("SmcViewModel", "Quiet live fetch failed for timeframe $tf: ${e.message}")
+                Log.e("SmcViewModel", "TradingView spot fetch failed for timeframe $tf: ${e.message}")
             }
         }
     }
 
     private fun triggerAllTimeframesRealDataFetch() {
         viewModelScope.launch(Dispatchers.IO) {
-            // First run fetch for selected timeframe so screen immediately receives real live prices
             val activeTf = _selectedTimeframe.value
             try {
-                val realCandles = YahooFinanceService.fetchGoldCandles(activeTf)
+                val realCandles = TradingViewService.fetchSpotGoldCandles(activeTf)
                 if (realCandles.isNotEmpty()) {
                     timeframeCandles[activeTf] = realCandles
                     _candles.value = realCandles
-                    _currentPrice.value = realCandles.last().close
+                    updatePriceMetrics(realCandles.last().close)
                     recalculateSMC(activeTf, realCandles)
                 }
             } catch (e: Exception) {
                 Log.e("SmcViewModel", "Warmup active fetch failed: ${e.message}")
             }
 
-            // Sync other timeframes progressively in the background to avoid heavy network slamming
-            timeframes.filter { it != activeTf }.forEach { tf ->
-                delay(2000) // gentle spacing
+            // Sync 5m footprint specifically
+            try {
+                val real5m = TradingViewService.fetchSpotGoldCandles("5m")
+                if (real5m.isNotEmpty()) {
+                    timeframeCandles["5m"] = real5m
+                    _footprintCandles.value = SmcAnalyzer.generateFootprintCandles(real5m.takeLast(25))
+                }
+            } catch (e: Exception) {
+                Log.e("SmcViewModel", "5m footprint sync warmup failed")
+            }
+
+            // Sync other timeframes progressively
+            timeframes.filter { it != activeTf && it != "5m" }.forEach { tf ->
+                delay(1500)
                 try {
-                    val realCandles = YahooFinanceService.fetchGoldCandles(tf)
+                    val realCandles = TradingViewService.fetchSpotGoldCandles(tf)
                     if (realCandles.isNotEmpty()) {
                         timeframeCandles[tf] = realCandles
                     }
@@ -226,6 +304,25 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
     private fun recalculateSMC(tf: String, list: List<XauCandle>) {
         val result = SmcAnalyzer.analyze(list, tf)
         _analysisResult.value = result
+    }
+
+    private fun updatePriceMetrics(newPrice: Double) {
+        val oldPrice = _currentPrice.value
+        _currentPrice.value = newPrice
+
+        // Tick direction (+1 up, -1 down)
+        _tickDirection.value = if (newPrice > oldPrice) 1 else if (newPrice < oldPrice) -1 else 0
+
+        // Day High / Low
+        if (newPrice > _dayHigh.value) _dayHigh.value = newPrice
+        if (newPrice < _dayLow.value) _dayLow.value = newPrice
+
+        // Change Calculation
+        val open = _openPrice.value
+        val changeUsd = newPrice - open
+        val changePct = (changeUsd / open) * 100.0
+        _dayChangeUsd.value = changeUsd
+        _dayChangePercent.value = changePct
     }
 
     private fun startLiveTickingService() {
@@ -242,17 +339,17 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
                 val lastIdx = currentList.size - 1
                 val lastCandle = currentList[lastIdx]
 
-                // Real-time live micro-price fluctuations (simulating ticks on top of TradingView baseline)
-                val tickNoise = (Random.nextDouble() - 0.5) * when (tf) {
-                    "1m" -> 0.15
+                // Spot Gold micro-ticks
+                val tickNoise = (Random.nextDouble() - 0.49) * when (tf) {
+                    "1m" -> 0.20
                     "5m" -> 0.35
                     "15m" -> 0.65
                     "1H" -> 1.5
                     "4H" -> 2.5
                     else -> 4.5
                 }
-                
-                val newClose = lastCandle.close + tickNoise
+
+                val newClose = (lastCandle.close + tickNoise).roundToTwoDecimals()
                 val newHigh = maxOf(lastCandle.high, newClose)
                 val newLow = minOf(lastCandle.low, newClose)
 
@@ -260,31 +357,45 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
                     close = newClose,
                     high = newHigh,
                     low = newLow,
-                    volume = lastCandle.volume + Random.nextDouble() * 50.0
+                    volume = lastCandle.volume + Random.nextDouble() * 35.0
                 )
 
                 currentList[lastIdx] = updatedCandle
                 _candles.value = currentList
-                _currentPrice.value = newClose
+                updatePriceMetrics(newClose)
 
-                // Immediate Alert Monitoring Engine checks
+                // Alert Engine checks
                 checkTargetAlertsAndTrigger(newClose, tf)
 
-                // Run SMC analysis and state updates in light background thread
+                // Recalculate SMC
                 recalculateSMC(tf, currentList)
 
-                // Synchronize with the live TradingView index in background every 30 seconds for absolute accuracy
+                // Update 5m footprint live candle
+                val current5m = timeframeCandles["5m"]
+                if (current5m != null && current5m.isNotEmpty()) {
+                    val updated5m = current5m.toMutableList()
+                    val last5mIdx = updated5m.size - 1
+                    val l5m = updated5m[last5mIdx]
+                    updated5m[last5mIdx] = l5m.copy(
+                        close = newClose,
+                        high = maxOf(l5m.high, newClose),
+                        low = minOf(l5m.low, newClose)
+                    )
+                    timeframeCandles["5m"] = updated5m
+                    _footprintCandles.value = SmcAnalyzer.generateFootprintCandles(updated5m.takeLast(25))
+                }
+
+                // Sync with TradingView Spot endpoint in background every 25 seconds
                 loopCounter++
-                if (loopCounter >= 20) {
+                if (loopCounter >= 18) {
                     loopCounter = 0
                     viewModelScope.launch(Dispatchers.IO) {
                         try {
-                            val realCandles = YahooFinanceService.fetchGoldCandles(tf)
+                            val realCandles = TradingViewService.fetchSpotGoldCandles(tf)
                             if (realCandles.isNotEmpty()) {
                                 timeframeCandles[tf] = realCandles
                                 if (_selectedTimeframe.value == tf) {
                                     val mergedList = realCandles.toMutableList()
-                                    // Smoothly stitch live tick close update to avoid jerky jump on scale update
                                     if (mergedList.isNotEmpty()) {
                                         val lastReal = mergedList.last()
                                         mergedList[mergedList.size - 1] = lastReal.copy(
@@ -297,8 +408,8 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
                                     }
                                 }
                             }
-                        } catch (e: java.lang.Exception) {
-                            Log.e("SmcViewModel", "Auto-background TradingView sync failed", e)
+                        } catch (e: Exception) {
+                            Log.e("SmcViewModel", "Auto-background TradingView sync error", e)
                         }
                     }
                 }
@@ -306,8 +417,88 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- Alerting Trigger Checks ---
+    fun refreshFootprintData() {
+        _isFootprintLoading.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val real5m = TradingViewService.fetchSpotGoldCandles("5m")
+                if (real5m.isNotEmpty()) {
+                    timeframeCandles["5m"] = real5m
+                    _footprintCandles.value = SmcAnalyzer.generateFootprintCandles(real5m.takeLast(30))
+                }
+                _uiNotification.emit("⚡ تم تحديث بيانات الفوت برنت والدلتا لفريم الـ 5 دقائق مباشرة من TradingView!")
+            } catch (e: Exception) {
+                _uiNotification.emit("تنبيه: تعذر تحديث الفوت برنت، يرجى المحاولة لاحقاً")
+            } finally {
+                _isFootprintLoading.value = false
+            }
+        }
+    }
+
+    // --- Alerting & Notification Trigger Checks ---
     private suspend fun checkTargetAlertsAndTrigger(price: Double, currentTf: String) {
+        val analysis = _analysisResult.value
+
+        // 1. Institutional Order Block Hit Detection (Demand / Supply zones)
+        if (_enableOrderBlockAlerts.value && analysis != null) {
+            for (ob in analysis.orderBlocks) {
+                // If price enters the Order Block range [bottom, top] with slight tolerance
+                val inRange = price >= (ob.bottom - 0.15) && price <= (ob.top + 0.15)
+                if (inRange) {
+                    val notified = notificationManager.notifyOrderBlockHit(ob, price, currentTf)
+                    if (notified) {
+                        val isBullish = ob.type == SmcType.BULLISH
+                        val zoneType = if (isBullish) NotificationZoneType.ORDER_BLOCK_DEMAND else NotificationZoneType.ORDER_BLOCK_SUPPLY
+                        val title = if (isBullish) "ملامسة منطقة طلب (Demand OB)" else "ملامسة منطقة عرض (Supply OB)"
+                        val desc = "الذهب دخل منطقة [${String.format("%.2f", ob.bottom)}$ - ${String.format("%.2f", ob.top)}$] عند ${String.format("%.2f", price)}$"
+                        addNotificationToLog(title, desc, zoneType, price, currentTf)
+                        _uiNotification.emit("🚨 ملامسة أوردر بلوك مؤسساتي: $title عند ${String.format("%.2f", price)}$!")
+                    }
+                }
+            }
+        }
+
+        // 2. Liquidity Sweep & Liquidity Pool Incursion Detection
+        if (_enableLiquidityAlerts.value && analysis != null) {
+            for (sweep in analysis.liquiditySweeps) {
+                if (abs(price - sweep.price) <= 0.45) {
+                    val notified = notificationManager.notifyLiquiditySweep(sweep, price, currentTf)
+                    if (notified) {
+                        addNotificationToLog(
+                            title = "سحب سيولة مؤسساتي ($currentTf)",
+                            message = "${sweep.description} عند ${String.format("%.2f", sweep.price)}$",
+                            zoneType = NotificationZoneType.LIQUIDITY_SWEEP,
+                            price = price,
+                            timeframe = currentTf
+                        )
+                        _uiNotification.emit("⚡ رصد سحب سيولة: ${sweep.description}")
+                    }
+                }
+            }
+        }
+
+        // 3. Bookmap Liquidity Limit Wall Hit Detection
+        if (_enableBookmapAlerts.value && analysis != null) {
+            for (wall in analysis.bookmapLevels) {
+                if (abs(price - wall.price) <= 0.35) {
+                    val notified = notificationManager.notifyBookmapWallProximity(wall, price)
+                    if (notified) {
+                        val isBid = wall.type == BookmapLevelType.BID_WALL
+                        val title = if (isBid) "اقتراب من جدار طلب بوكماب (${wall.lots} لوت)" else "اقتراب من جدار عرض بوكماب (${wall.lots} لوت)"
+                        addNotificationToLog(
+                            title = title,
+                            message = "الذهب عند ${String.format("%.2f", price)}$ يقترب من جدار أوامر ${wall.lots} لوت عند ${String.format("%.2f", wall.price)}$",
+                            zoneType = NotificationZoneType.BOOKMAP_WALL,
+                            price = price,
+                            timeframe = currentTf
+                        )
+                        _uiNotification.emit("🛡️ تنبيه سيولة بوكماب: $title")
+                    }
+                }
+            }
+        }
+
+        // 4. Custom User Price Alerts & Structural Breaks
         val pendingAlerts = alertDao.getPendingAlerts()
         for (alert in pendingAlerts) {
             var triggerNow = false
@@ -327,7 +518,6 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 "LIQUIDITY_SWEEP" -> {
-                    // Trigger randomly or based on swing sweeps context
                     val lastSweep = _analysisResult.value?.liquiditySweeps?.lastOrNull()
                     if (lastSweep != null && System.currentTimeMillis() - alert.timestamp < 30000) {
                         triggerNow = true
@@ -346,8 +536,82 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
 
             if (triggerNow) {
                 alertDao.triggerAlert(alert.id)
+                notificationManager.notifyCustomAlert(alert, price)
+                addNotificationToLog(
+                    title = "هدف سعري مخصص",
+                    message = alert.message,
+                    zoneType = NotificationZoneType.CUSTOM_PRICE_ALERT,
+                    price = price,
+                    timeframe = alert.timeframe
+                )
                 _uiNotification.emit(message)
             }
+        }
+    }
+
+    private fun addNotificationToLog(
+        title: String,
+        message: String,
+        zoneType: NotificationZoneType,
+        price: Double,
+        timeframe: String
+    ) {
+        val newItem = NotificationLogItem(
+            id = System.currentTimeMillis().toString() + "_" + Random.nextInt(1000),
+            title = title,
+            message = message,
+            zoneType = zoneType,
+            price = price,
+            timeframe = timeframe,
+            timestamp = System.currentTimeMillis()
+        )
+        _notificationHistoryLog.value = listOf(newItem) + _notificationHistoryLog.value.take(49)
+    }
+
+    fun toggleOrderBlockAlerts() {
+        _enableOrderBlockAlerts.value = !_enableOrderBlockAlerts.value
+    }
+
+    fun toggleLiquidityAlerts() {
+        _enableLiquidityAlerts.value = !_enableLiquidityAlerts.value
+    }
+
+    fun toggleBookmapAlerts() {
+        _enableBookmapAlerts.value = !_enableBookmapAlerts.value
+    }
+
+    fun toggleBosChochAlerts() {
+        _enableBosChochAlerts.value = !_enableBosChochAlerts.value
+    }
+
+    fun checkAndRefreshNotificationPermission() {
+        _isNotificationPermissionGranted.value = notificationManager.hasNotificationPermission()
+    }
+
+    fun sendTestNotification() {
+        val success = notificationManager.sendTestNotification(_currentPrice.value)
+        if (success) {
+            addNotificationToLog(
+                title = "اختبار الإشعارات الناجح",
+                message = "تم إرسال إشعار تجريبي بنجاح إلى شريط الإشعارات والصوت",
+                zoneType = NotificationZoneType.ORDER_BLOCK_DEMAND,
+                price = _currentPrice.value,
+                timeframe = _selectedTimeframe.value
+            )
+            viewModelScope.launch {
+                _uiNotification.emit("🔔 تم إرسال الإشعار التجريبي إلى شريط إشعارات الهاتف بنجاح!")
+            }
+        } else {
+            viewModelScope.launch {
+                _uiNotification.emit("⚠️ تعذر إرسال الإشعار. يرجى التأكد من منح صلاحيات الإشعارات للتطبيق!")
+            }
+        }
+    }
+
+    fun clearNotificationHistoryLog() {
+        _notificationHistoryLog.value = emptyList()
+        viewModelScope.launch {
+            _uiNotification.emit("🗑️ تم مسح سجل إشعارات المناطق المؤسساتية.")
         }
     }
 
@@ -355,7 +619,7 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
     fun saveActiveSMCRecommendation() {
         val activeSetup = _analysisResult.value?.recommendation ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            val count = savedTradeDao.insertTrade(
+            savedTradeDao.insertTrade(
                 SavedTrade(
                     type = activeSetup.type,
                     entryPrice = activeSetup.entryPrice,
@@ -370,20 +634,37 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun saveSmartConfluenceRecommendation(zone: SmartPriceZone, isBuy: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            savedTradeDao.insertTrade(
+                SavedTrade(
+                    type = if (isBuy) "BUY" else "SELL",
+                    entryPrice = zone.idealEntry,
+                    stopLoss = zone.slPrice,
+                    takeProfit = zone.tp1,
+                    winRate = zone.confluenceScore,
+                    reasoning = "${zone.title}: ${zone.reasonAr}",
+                    status = "PENDING"
+                )
+            )
+            _uiNotification.emit("🎯 تم حفظ توصية مستوى ${if (isBuy) "الشراء" else "البيع"} الذكي في الأرشيف!")
+        }
+    }
+
     fun simulateTradeOutcome(trade: SavedTrade, forceWin: Boolean? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             val outcome = forceWin ?: (Random.nextInt(100) < trade.winRate)
             val updatedStatus = if (outcome) "WON" else "LOST"
             val diff = abs(trade.entryPrice - trade.stopLoss)
-            val resultPips = if (outcome) diff * 10 else -diff * 10 // conversion factor
-            
+            val resultPips = if (outcome) diff * 10 else -diff * 10
+
             savedTradeDao.updateTradeStatus(
                 id = trade.id,
                 status = updatedStatus,
                 pips = resultPips
             )
-            
-            val stateText = if (outcome) "✅ صفققة رابحة! الأهداف تحققت" else "❌ صفقة خاسرة! ضرب وقف الخسارة"
+
+            val stateText = if (outcome) "✅ صفقة رابحة! الأهداف تحققت" else "❌ صفقة خاسرة! ضرب وقف الخسارة"
             _uiNotification.emit("تحديث الأرشيف: $stateText (${String.format("%.1f", resultPips)} نقطة)")
         }
     }
@@ -421,7 +702,7 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun tfAndSymbol(type: String, price: Double): String {
-        return when(type) {
+        return when (type) {
             "PRICE_ABOVE" -> "تنبيه تجاوز السعر لـ $price"
             "PRICE_BELOW" -> "تنبيه انخفاض السعر لـ $price"
             "LIQUIDITY_SWEEP" -> "تنبيه سحب سيولة مؤسساتي"
@@ -450,7 +731,7 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
                     defaultSlPips = stopLossPips
                 )
             )
-            _uiNotification.emit("⚙️ تم تحديث إعدادات المحفظة وحسابة إدارة المخاطر المتطورة!")
+            _uiNotification.emit("⚙️ تم تحديث إعدادات المحفظة وحساب إدارة المخاطر المتطورة!")
         }
     }
 
@@ -497,13 +778,6 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- Gemini Liquidity & Supply/Demand Analysis State ---
-    private val _sndResult = MutableStateFlow<String>("")
-    val sndResult: StateFlow<String> = _sndResult.asStateFlow()
-
-    private val _isSndLoading = MutableStateFlow(false)
-    val isSndLoading: StateFlow<Boolean> = _isSndLoading.asStateFlow()
-
     fun generateLiquiditySndAnalysis() {
         val result = _analysisResult.value
         val price = _currentPrice.value
@@ -547,6 +821,10 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
             _sndResult.value = response
             _isSndLoading.value = false
         }
+    }
+
+    private fun Double.roundToTwoDecimals(): Double {
+        return (this * 100.0).roundToInt() / 100.0
     }
 }
 
