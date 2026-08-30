@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -62,6 +63,10 @@ fun SmcApp(viewModel: SmcViewModel) {
     val dayChangePercent by viewModel.dayChangePercent.collectAsStateWithLifecycle()
     val tickDirection by viewModel.tickDirection.collectAsStateWithLifecycle()
     val spotSpread by viewModel.spotSpread.collectAsStateWithLifecycle()
+    val bidPrice by viewModel.bidPrice.collectAsStateWithLifecycle()
+    val askPrice by viewModel.askPrice.collectAsStateWithLifecycle()
+    val candleCountdown by viewModel.candleCountdown.collectAsStateWithLifecycle()
+    val activeCandle by viewModel.activeCandle.collectAsStateWithLifecycle()
 
     val selectedTf by viewModel.selectedTimeframe.collectAsStateWithLifecycle()
     val candles by viewModel.candles.collectAsStateWithLifecycle()
@@ -230,8 +235,8 @@ fun SmcApp(viewModel: SmcViewModel) {
                 .padding(innerPadding)
                 .fillMaxSize()
         ) {
-            // Live Spot Gold Price Bar with detailed Market Ticker
-            PriceShimmerHeader(
+            // Live Spot Gold TradingView Style Price Bar & Market Ticker
+            TradingViewPriceHeader(
                 currentPrice = currentPrice,
                 dayHigh = dayHigh,
                 dayLow = dayLow,
@@ -239,6 +244,10 @@ fun SmcApp(viewModel: SmcViewModel) {
                 dayChangePercent = dayChangePercent,
                 tickDirection = tickDirection,
                 spotSpread = spotSpread,
+                bidPrice = bidPrice,
+                askPrice = askPrice,
+                candleCountdown = candleCountdown,
+                activeCandle = activeCandle,
                 selectedTf = selectedTf,
                 analysisResult = analysisResult
             )
@@ -254,6 +263,11 @@ fun SmcApp(viewModel: SmcViewModel) {
                         candles = candles,
                         analysis = analysisResult,
                         selectedTf = selectedTf,
+                        currentPrice = currentPrice,
+                        dayHigh = dayHigh,
+                        dayLow = dayLow,
+                        tickDirection = tickDirection,
+                        candleCountdown = candleCountdown,
                         onTfSelected = { viewModel.setTimeframe(it) }
                     )
                     "footprint" -> FootprintScreen(
@@ -329,7 +343,7 @@ object MathUtils {
 // --- Composable Sub-Components ---
 
 @Composable
-fun PriceShimmerHeader(
+fun TradingViewPriceHeader(
     currentPrice: Double,
     dayHigh: Double,
     dayLow: Double,
@@ -337,108 +351,312 @@ fun PriceShimmerHeader(
     dayChangePercent: Double,
     tickDirection: Int,
     spotSpread: Double,
+    bidPrice: Double,
+    askPrice: Double,
+    candleCountdown: String,
+    activeCandle: XauCandle?,
     selectedTf: String,
     analysisResult: SmcAnalysisResult?
 ) {
     val isPositive = dayChangeUsd >= 0
-    val tickColor = if (tickDirection > 0) GreenBullish else if (tickDirection < 0) RedBearish else GoldPrimary
+    val tvGreen = Color(0xFF089981)
+    val tvRed = Color(0xFFF23645)
+    val tickColor = if (tickDirection > 0) tvGreen else if (tickDirection < 0) tvRed else GoldPrimary
+
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse_beacon")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(750),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ),
+        label = "pulse_alpha"
+    )
+
+    val activeOpen = activeCandle?.open ?: (currentPrice - 2.5)
+    val activeHigh = activeCandle?.high ?: dayHigh
+    val activeLow = activeCandle?.low ?: dayLow
+    val activeClose = activeCandle?.close ?: currentPrice
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .testTag("spot_gold_price_card"),
-        colors = CardDefaults.cardColors(containerColor = DarkCard),
-        border = BorderStroke(1.2.dp, GoldPrimary.copy(alpha = 0.5f))
+            .padding(horizontal = 8.dp, vertical = 5.dp)
+            .testTag("tradingview_spot_gold_header"),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF131722)),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, Color(0xFF2A2E39))
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            // Row 1: Ticker Name, Spot Badge & Status
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            // Row 1: TradingView Symbol, TF, Feed Source, Live Beacon & Institutional Phase
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .background(GoldPrimary.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(text = "XAU/USD", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = GoldPrimary)
-                    }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // XAUUSD Symbol
                     Text(
-                        text = "الذهب الفوري Spot (TradingView)",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+                        text = "XAUUSD",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color(0xFFD1D4DC),
+                        fontFamily = FontFamily.SansSerif
                     )
+
+                    // Timeframe Pill
                     Box(
                         modifier = Modifier
-                            .size(7.dp)
-                            .background(tickColor, RoundedCornerShape(50))
-                    )
-                }
-
-                val stateText = when (analysisResult?.marketState) {
-                    MarketState.ACCUMULATION -> "تجميع حيتان 📥"
-                    MarketState.DISTRIBUTION -> "تصريف بيع 📤"
-                    else -> "توزيع طبيعي ⚖️"
-                }
-                Text(
-                    text = stateText,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = GoldPrimary
-                )
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Row 2: Live Price, 24h Change, Range
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        text = "$${String.format("%.2f", currentPrice)}",
-                        fontSize = 25.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = GoldPrimary,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Box(
-                        modifier = Modifier
-                            .padding(bottom = 4.dp)
-                            .background(
-                                color = if (isPositive) GreenBullish.copy(alpha = 0.15f) else RedBearish.copy(alpha = 0.15f),
-                                shape = RoundedCornerShape(4.dp)
-                            )
+                            .background(Color(0xFF2A2E39), RoundedCornerShape(4.dp))
                             .padding(horizontal = 5.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = "${if (isPositive) "+" else ""}${String.format("%.2f", dayChangeUsd)}$ (${if (isPositive) "+" else ""}${String.format("%.2f", dayChangePercent)}%)",
+                            text = selectedTf,
                             fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = GoldPrimary
+                        )
+                    }
+
+                    // Feed Source & Instrument
+                    Text(
+                        text = "Spot Gold / USD • OANDA",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF787B86)
+                    )
+
+                    // Live Glowing Beacon
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        modifier = Modifier
+                            .background(tvGreen.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(tvGreen.copy(alpha = pulseAlpha), RoundedCornerShape(50))
+                        )
+                        Text(
+                            text = "مباشر",
+                            fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (isPositive) GreenBullish else RedBearish,
+                            color = tvGreen
+                        )
+                    }
+                }
+
+                // Institutional Phase / Market State
+                val stateText = when (analysisResult?.marketState) {
+                    MarketState.ACCUMULATION -> "تجميع حيتان 📥"
+                    MarketState.DISTRIBUTION -> "تصريف بيع 📤"
+                    else -> "توازن مؤسساتي ⚖️"
+                }
+                Box(
+                    modifier = Modifier
+                        .background(GoldPrimary.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = stateText,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = GoldPrimary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Row 2: TradingView Giant Spot Price, Change Tag & Day Range Bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Price and Change Pill
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = String.format(Locale.US, "%,.2f", currentPrice),
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color(0xFFF0F3FA),
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "USD",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF787B86),
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+
+                    // Change Pill (TradingView signature green/red badge)
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                color = if (isPositive) tvGreen.copy(alpha = 0.18f) else tvRed.copy(alpha = 0.18f),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = if (isPositive) tvGreen.copy(alpha = 0.45f) else tvRed.copy(alpha = 0.45f),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = "${if (isPositive) "▲ +" else "▼ "}${String.format(Locale.US, "%.2f", dayChangeUsd)} (${if (isPositive) "+" else ""}${String.format(Locale.US, "%.2f", dayChangePercent)}%)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (isPositive) tvGreen else tvRed,
                             fontFamily = FontFamily.Monospace
                         )
                     }
                 }
 
-                // High / Low / Spread
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(text = "أعلى: $${String.format("%.1f", dayHigh)}", fontSize = 10.sp, color = GreenBullish, fontFamily = FontFamily.Monospace)
-                        Text(text = "أدنى: $${String.format("%.1f", dayLow)}", fontSize = 10.sp, color = RedBearish, fontFamily = FontFamily.Monospace)
+                // Day Range Slider Track
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    modifier = Modifier.width(130.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "L ${String.format(Locale.US, "%.1f", dayLow)}",
+                            fontSize = 9.sp,
+                            color = Color(0xFF787B86),
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "H ${String.format(Locale.US, "%.1f", dayHigh)}",
+                            fontSize = 9.sp,
+                            color = Color(0xFF787B86),
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    // Mini Progress Track
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                    ) {
+                        val trackWidth = size.width
+                        val trackHeight = size.height
+                        // Background track
+                        drawRoundRect(
+                            color = Color(0xFF2A2E39),
+                            size = Size(trackWidth, trackHeight),
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+                        )
+                        val totalRange = maxOf(0.1, dayHigh - dayLow)
+                        val fraction = ((currentPrice - dayLow) / totalRange).toFloat().coerceIn(0f, 1f)
+                        val activeWidth = trackWidth * fraction
+                        drawRoundRect(
+                            color = GoldPrimary,
+                            size = Size(activeWidth, trackHeight),
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+                        )
+                        // Price dot
+                        drawCircle(
+                            color = Color.White,
+                            radius = 3.5.dp.toPx(),
+                            center = Offset(activeWidth, trackHeight / 2)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Row 3: TradingView OHLC Bar, Bid/Ask & Real-Time Candle Countdown
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF1E222D), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // OHLC Row
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "O ${String.format(Locale.US, "%.1f", activeOpen)}",
+                        fontSize = 10.sp,
+                        color = Color(0xFF787B86),
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "H ${String.format(Locale.US, "%.1f", activeHigh)}",
+                        fontSize = 10.sp,
+                        color = tvGreen,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "L ${String.format(Locale.US, "%.1f", activeLow)}",
+                        fontSize = 10.sp,
+                        color = tvRed,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "C ${String.format(Locale.US, "%.1f", activeClose)}",
+                        fontSize = 10.sp,
+                        color = Color(0xFFD1D4DC),
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // Bid/Ask & Countdown Timer
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Bid ${String.format(Locale.US, "%.2f", bidPrice)}",
+                        fontSize = 9.sp,
+                        color = Color(0xFF787B86),
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "Ask ${String.format(Locale.US, "%.2f", askPrice)}",
+                        fontSize = 9.sp,
+                        color = Color(0xFF787B86),
+                        fontFamily = FontFamily.Monospace
+                    )
+
+                    // Countdown pill (TradingView style candle timer)
                     Box(
                         modifier = Modifier
-                            .background(DarkCarbon, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 5.dp, vertical = 3.dp)
+                            .background(Color(0xFF2A2E39), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 5.dp, vertical = 1.5.dp)
                     ) {
-                        Text(text = "السبريد ${String.format("%.2f", spotSpread)}$", fontSize = 9.sp, color = TextSecondary)
+                        Text(
+                            text = "⏱️ $candleCountdown",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = GoldPrimary,
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
                 }
             }
@@ -452,6 +670,11 @@ fun ChartRoomScreen(
     candles: List<XauCandle>,
     analysis: SmcAnalysisResult?,
     selectedTf: String,
+    currentPrice: Double,
+    dayHigh: Double,
+    dayLow: Double,
+    tickDirection: Int,
+    candleCountdown: String,
     onTfSelected: (String) -> Unit
 ) {
     var enableBookmap by remember { mutableStateOf(true) }
@@ -630,6 +853,12 @@ fun ChartRoomScreen(
                         enableBookmap = enableBookmap,
                         enableOrderflow = enableOrderflow,
                         minLotFilter = minLotFilter,
+                        selectedTf = selectedTf,
+                        currentPrice = currentPrice,
+                        dayHigh = dayHigh,
+                        dayLow = dayLow,
+                        tickDirection = tickDirection,
+                        candleCountdown = candleCountdown,
                         onScrollChanged = { shift ->
                             startIndex = (startIndex + shift).coerceIn(0, maxStartIndex)
                         },
@@ -763,6 +992,12 @@ fun SMCChartCanvas(
     enableBookmap: Boolean,
     enableOrderflow: Boolean,
     minLotFilter: Int,
+    selectedTf: String,
+    currentPrice: Double,
+    dayHigh: Double,
+    dayLow: Double,
+    tickDirection: Int,
+    candleCountdown: String,
     onScrollChanged: (Int) -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit
@@ -773,19 +1008,19 @@ fun SMCChartCanvas(
     val minPrice = renderCandles.minOf { it.low } * 0.9995
     val maxPrice = renderCandles.maxOf { it.high } * 1.0005
     val priceRange = maxPrice - minPrice
-    val currentPrice = renderCandles.lastOrNull()?.close ?: 2342.0
+    val effectivePrice = renderCandles.lastOrNull()?.close ?: currentPrice
 
     // Bookmap levels representing high contract pending limits (Bids below support, Asks above resistance)
     val bookmapLevels = listOf(
         // Asks (Sellers block above current price)
-        Triple(currentPrice + 3.8, 520, "حد عرض بوكماب"),
-        Triple(currentPrice + 7.5, 940, "عرض مؤسساتي بوكماب"),
-        Triple(currentPrice + 13.0, 1650, "سيولة حيتان تصريف"),
+        Triple(effectivePrice + 3.8, 520, "حد عرض بوكماب"),
+        Triple(effectivePrice + 7.5, 940, "عرض مؤسساتي بوكماب"),
+        Triple(effectivePrice + 13.0, 1650, "سيولة حيتان تصريف"),
         
         // Bids (Buyers block below current price)
-        Triple(currentPrice - 3.2, 540, "حد شراء بوكماب"),
-        Triple(currentPrice - 6.8, 980, "طلب مؤسساتي بوكماب"),
-        Triple(currentPrice - 12.0, 1820, "سيولة حيتان تجميع")
+        Triple(effectivePrice - 3.2, 540, "حد شراء بوكماب"),
+        Triple(effectivePrice - 6.8, 980, "طلب مؤسساتي بوكماب"),
+        Triple(effectivePrice - 12.0, 1820, "سيولة حيتان تجميع")
     )
 
     var dragAccumulator by remember { mutableStateOf(0f) }
@@ -794,8 +1029,8 @@ fun SMCChartCanvas(
     Canvas(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF111419))
-            .padding(top = 22.dp, bottom = 22.dp, start = 8.dp, end = 52.dp)
+            .background(Color(0xFF131722))
+            .padding(top = 18.dp, bottom = 22.dp, start = 6.dp, end = 68.dp)
             .pointerInput(renderCandles) {
                 detectTransformGestures { centroid, pan, zoom, rotation ->
                     // Zoom parsing
@@ -834,6 +1069,18 @@ fun SMCChartCanvas(
         // Helper to convert price value to Canvas Y coordinate
         fun getRelativeY(priceValue: Double): Float {
             return (height - ((priceValue - minPrice) / priceRange * height)).toFloat()
+        }
+
+        // Draw TradingView Watermark in background
+        val nativeCanvasBg = drawContext.canvas.nativeCanvas as android.graphics.Canvas
+        nativeCanvasBg.apply {
+            val pWatermark = android.graphics.Paint().apply {
+                color = android.graphics.Color.parseColor("#181D2A")
+                textSize = 56f
+                isFakeBoldText = true
+                textAlign = android.graphics.Paint.Align.CENTER
+            }
+            drawText("XAUUSD • $selectedTf", width / 2f, height / 2f + 20f, pWatermark)
         }
 
         // Draw London, Tokyo, New York sessions background columns first (behind candlesticks)
@@ -1128,6 +1375,93 @@ fun SMCChartCanvas(
                     }
                     val labelOffset = if (sweep.type == SweepType.BUY_STOP) -18f else 32f
                     drawText("SWEEP 🎯", itemX, itemY + labelOffset, p)
+                }
+            }
+        }
+
+        // TradingView Horizontal Real-Time Price Line & Right Axis Badge
+        val livePriceY = getRelativeY(effectivePrice)
+        val tvGreen = Color(0xFF089981)
+        val tvRed = Color(0xFFF23645)
+        val tickColor = if (tickDirection > 0) tvGreen else if (tickDirection < 0) tvRed else GoldPrimary
+
+        if (livePriceY in 0f..height) {
+            // Live dashed price line across chart
+            drawLine(
+                color = tickColor,
+                start = Offset(0f, livePriceY),
+                end = Offset(width, livePriceY),
+                strokeWidth = 2.5f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+            )
+
+            // Right Axis TradingView Solid Badge with Price & Countdown
+            val nativeCanvas = drawContext.canvas.nativeCanvas as android.graphics.Canvas
+            nativeCanvas.apply {
+                val badgeLeft = width + 4f
+                val badgeRight = width + 64f
+                val badgeTop = livePriceY - 14f
+                val badgeBottom = livePriceY + 14f
+
+                // Live Price Solid Badge
+                val pBadgeBg = android.graphics.Paint().apply {
+                    color = if (tickDirection > 0) android.graphics.Color.parseColor("#089981") else android.graphics.Color.parseColor("#F23645")
+                    style = android.graphics.Paint.Style.FILL
+                }
+                drawRoundRect(
+                    badgeLeft, badgeTop, badgeRight, badgeBottom,
+                    6f, 6f, pBadgeBg
+                )
+
+                // Price Text
+                val pPriceText = android.graphics.Paint().apply {
+                    color = android.graphics.Color.WHITE
+                    textSize = 18f
+                    isFakeBoldText = true
+                    textAlign = android.graphics.Paint.Align.CENTER
+                }
+                drawText(
+                    String.format(Locale.US, "%.2f", effectivePrice),
+                    (badgeLeft + badgeRight) / 2f,
+                    livePriceY + 6f,
+                    pPriceText
+                )
+
+                // Candle Countdown Tag below Price Tag
+                val timerTop = livePriceY + 16f
+                val timerBottom = livePriceY + 34f
+                if (timerBottom <= height + 16f) {
+                    val pTimerBg = android.graphics.Paint().apply {
+                        color = android.graphics.Color.parseColor("#1E222D")
+                        style = android.graphics.Paint.Style.FILL
+                    }
+                    drawRoundRect(
+                        badgeLeft, timerTop, badgeRight, timerBottom,
+                        4f, 4f, pTimerBg
+                    )
+
+                    val pTimerBorder = android.graphics.Paint().apply {
+                        color = android.graphics.Color.parseColor("#2A2E39")
+                        style = android.graphics.Paint.Style.STROKE
+                        strokeWidth = 1.5f
+                    }
+                    drawRoundRect(
+                        badgeLeft, timerTop, badgeRight, timerBottom,
+                        4f, 4f, pTimerBorder
+                    )
+
+                    val pTimerText = android.graphics.Paint().apply {
+                        color = android.graphics.Color.parseColor("#D1D4DC")
+                        textSize = 14f
+                        isFakeBoldText = true
+                        textAlign = android.graphics.Paint.Align.CENTER
+                    }
+                    drawText(
+                        candleCountdown,
+                        (badgeLeft + badgeRight) / 2f,
+                        timerTop + 13f,
+                        pTimerText
+                    )
                 }
             }
         }

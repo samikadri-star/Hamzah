@@ -84,6 +84,21 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
     private val _spotSpread = MutableStateFlow(0.18) // Typical spot gold spread in USD
     val spotSpread: StateFlow<Double> = _spotSpread.asStateFlow()
 
+    // TradingView Real-Time Bid & Ask Spot Prices
+    private val _bidPrice = MutableStateFlow(2514.71)
+    val bidPrice: StateFlow<Double> = _bidPrice.asStateFlow()
+
+    private val _askPrice = MutableStateFlow(2514.89)
+    val askPrice: StateFlow<Double> = _askPrice.asStateFlow()
+
+    // TradingView Active Candle Countdown (e.g. "04:32")
+    private val _candleCountdown = MutableStateFlow("04:32")
+    val candleCountdown: StateFlow<String> = _candleCountdown.asStateFlow()
+
+    // Active candle details
+    val activeCandle: StateFlow<XauCandle?> = _candles.map { it.lastOrNull() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     // --- SMC Analysis Result ---
     private val _analysisResult = MutableStateFlow<SmcAnalysisResult?>(null)
     val analysisResult: StateFlow<SmcAnalysisResult?> = _analysisResult.asStateFlow()
@@ -142,6 +157,7 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
 
         // 4. Start live price simulator & auto background TradingView Spot sync
         startLiveTickingService()
+        startCountdownTimerService()
 
         // 5. Trigger active background fetching of all timeframes from TradingView Spot
         triggerAllTimeframesRealDataFetch()
@@ -317,12 +333,49 @@ class SmcViewModel(application: Application) : AndroidViewModel(application) {
         if (newPrice > _dayHigh.value) _dayHigh.value = newPrice
         if (newPrice < _dayLow.value) _dayLow.value = newPrice
 
+        // TradingView Bid & Ask Real-Time Calculation
+        val spread = _spotSpread.value
+        _bidPrice.value = (newPrice - (spread / 2.0)).roundToTwoDecimals()
+        _askPrice.value = (newPrice + (spread / 2.0)).roundToTwoDecimals()
+
         // Change Calculation
         val open = _openPrice.value
         val changeUsd = newPrice - open
         val changePct = (changeUsd / open) * 100.0
         _dayChangeUsd.value = changeUsd
         _dayChangePercent.value = changePct
+    }
+
+    private fun startCountdownTimerService() {
+        viewModelScope.launch(Dispatchers.Default) {
+            while (true) {
+                _candleCountdown.value = calculateRemainingTimeframeCountdown(_selectedTimeframe.value)
+                delay(1000)
+            }
+        }
+    }
+
+    private fun calculateRemainingTimeframeCountdown(tf: String): String {
+        val now = System.currentTimeMillis()
+        val intervalMs = when (tf) {
+            "1m" -> 60_000L
+            "5m" -> 300_000L
+            "15m" -> 900_000L
+            "1H" -> 3_600_000L
+            "4H" -> 14_400_000L
+            "Daily", "D" -> 86_400_000L
+            else -> 900_000L
+        }
+        val remainingMs = intervalMs - (now % intervalMs)
+        val remainingSec = (remainingMs / 1000L).coerceAtLeast(0)
+        val hours = remainingSec / 3600
+        val minutes = (remainingSec % 3600) / 60
+        val seconds = remainingSec % 60
+        return if (hours > 0) {
+            String.format("%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format("%02d:%02d", minutes, seconds)
+        }
     }
 
     private fun startLiveTickingService() {
